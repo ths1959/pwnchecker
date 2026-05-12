@@ -1,6 +1,7 @@
 # PwnChecker
 
-Local-first breach checker with an encrypted vault.
+Started as a simple itch: too many accounts spread across too many services, and no easy way to do a quick check-in once in a while. PwnChecker keeps a small list of accounts in an encrypted vault, then `Check Now` generates a local report that highlights anything worth paying attention to. It also includes a domain posture check that gives practical “recommended actions” based on how the email domain is configured.
+
 
 ![PwnChecker demo](PwnChecker-demo.png)
 
