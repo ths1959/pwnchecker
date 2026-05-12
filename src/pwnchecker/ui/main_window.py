@@ -202,11 +202,6 @@ class MainWindow(QMainWindow):
         self.accounts_table.setAlternatingRowColors(True)
         self.accounts_table.verticalHeader().setVisible(False)
         self.accounts_table.itemSelectionChanged.connect(self._on_accounts_selection_changed)
-
-        hint = QLabel("Encrypted account storage is enabled.")
-        hint.setStyleSheet("color: #555;")
-
-        layout.addWidget(hint)
         layout.addLayout(controls)
         layout.addWidget(self.accounts_table)
         return w
@@ -219,11 +214,6 @@ class MainWindow(QMainWindow):
 
         self.runs_list = QListWidget()
         self.runs_list.setObjectName("runs_list")
-
-        hint = QLabel("Run history is stored locally (checks are stubbed).")
-        hint.setStyleSheet("color: #555;")
-
-        layout.addWidget(hint)
         layout.addWidget(self.runs_list)
         return w
 
@@ -232,9 +222,6 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(w)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
-        hint = QLabel("Settings UI is placeholder in Phase 0.1.")
-        hint.setStyleSheet("color: #555;")
-        layout.addWidget(hint)
         layout.addStretch(1)
         return w
 
