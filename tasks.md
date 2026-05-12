@@ -69,13 +69,11 @@
 - Add "New since last run" deltas (password exposure count changes; domain posture changes).
 
 ## Phase 7: Non-Blocking Checks UX
-- Run `Check Now` in a background thread (no UI freeze).
+- Run `Check Now` with clear progress feedback (avoid crash/freeze perception).
+- Lock the UI during checks to prevent conflicting edits; keep `Cancel` available.
 - Show progress in the status bar (`Processing (i/n) - ...`).
+- Show a progress bar during checks; hide on finish/cancel.
+- Append live progress lines in Reports during checks.
 - Add `Cancel` to stop an in-progress run (partial results preserved).
-- Ensure no cross-thread SQLite connection use (open DB in worker thread).
-- Update GUI integration tests to wait for async completion.
-
-## Phase 8: Optional Desktop UI (Future Track)
-- Decide UI framework (Tauri/Electron) and shared core library strategy.
-- Build minimal screens: Unlock, Accounts, Check, Report.
-- Ensure identical encryption/storage behavior via shared core.
+- Ensure SQLite use stays safe during checks.
+- Update GUI integration tests to wait for completion.

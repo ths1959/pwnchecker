@@ -8,7 +8,7 @@ Local-first breach checker with an encrypted vault.
 - `Check Now` produces persisted runs and a textual report:
   - Password exposure check (HIBP Pwned Passwords, k-anonymity).
   - Email domain security posture check (MX/SPF/DMARC via DNS).
-- `Check Now` runs in the background with status progress and a Cancel action (UI remains responsive).
+- `Check Now` shows status progress and a Cancel action (UI is locked during checks to prevent edits).
 - Reports history with checkbox batch delete.
 - Settings (encrypted in vault):
   - Report redaction (affects existing reports immediately after save).

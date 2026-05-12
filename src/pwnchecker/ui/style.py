@@ -147,5 +147,13 @@ def apply_app_style(app: QApplication) -> None:
           background: #070b12;
           color: #76b7ff;
         }
+
+        QTextEdit#report_text {
+          background: #0b1220;
+          border: 1px solid #16314d;
+          padding: 10px;
+          selection-background-color: #0d2a2c;
+          selection-color: #79ffe1;
+        }
         """
     )

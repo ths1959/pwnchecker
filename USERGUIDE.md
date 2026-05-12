@@ -68,10 +68,11 @@ If omitted:
 `Check Now` creates a new run and writes results per account.
 
 While checks are running:
-- UI stays responsive.
+- The window does not freeze, but the UI is locked to prevent edits.
 - Status bar shows progress like `Processing (i/n) - Checking ...`.
+- A progress bar is shown in the status bar and disappears on completion or cancellation.
 - Cursor switches to a busy cursor.
-- `Check Now` is disabled and `Cancel` is enabled.
+- The app is locked to prevent edits during checks. `Cancel` remains available.
 
 Click `Cancel` to stop processing early. Partial results (for accounts already processed) remain stored in the run history, and the status shows `Ready (cancelled)` after cleanup.
 
