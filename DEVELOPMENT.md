@@ -24,6 +24,10 @@
 - Encryption boundary:
   - Only storage/crypto.py (or equivalent) handles encrypt/decrypt.
   - Domain models carry decrypted data only in-memory, short-lived.
+- Derived-data caching:
+  - Implement a dedicated storage module for derived identifier cache entries (per provider, versioned).
+  - Cache keys must be stable and non-secret (for example: account_id + provider + algo_version), but cached values must be treated as sensitive and stored in the encrypted DB unless proven non-sensitive.
+  - Cache invalidation is part of the core logic (not a UI concern) and must be covered by tests.
 - Provider clients return normalized domain objects; do not leak raw JSON into core logic.
 - Configuration:
   - core/config.py loads non-sensitive settings
@@ -68,7 +72,7 @@
 - Mock network calls:
   - use respx or pytest-httpx
 
-## 7. How You Should Behave When Making Changes
+## 7. Change Discipline
 - Before touching code:
   1. Identify the user-facing behavior change.
   2. Add/adjust a test that captures it.
@@ -86,5 +90,5 @@
 - KDF parameters are stored (salt, time/memory cost) and versioned.
 - AEAD nonces are unique and generated via CSPRNG.
 - DB fields that are sensitive are encrypted individually (not just "encrypt the whole file").
+- Cached derived identifier values are treated as sensitive by default and protected at rest.
 - "Reveal" output requires an explicit CLI flag and an unlocked vault.
-

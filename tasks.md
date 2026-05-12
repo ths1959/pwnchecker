@@ -14,10 +14,14 @@
   - key material handling
   - vault unlock
 - Implement encryption helpers and field-level encryption for identifiers.
+- Implement derived identifier hash cache tables and repository:
+  - per provider, versioned (normalization + hashing algorithm versions)
+  - invalidation on identifier change
 - Add tests:
   - encrypt/decrypt round-trip
   - wrong password fails
   - DB CRUD for accounts
+  - cache invalidation/version bump recompute behavior
 
 ## Phase 2: Core Account Management Commands
 - Implement init.
@@ -32,6 +36,9 @@
   - unlocks vault
   - iterates accounts
   - records skipped/failed states
+- Integrate cache into check pipeline:
+  - derive hashes only when missing/invalidated
+  - update last_checked_at_by_provider
 - Implement history and report (latest run summary).
 - Add delta logic between runs and tests for diff correctness.
 
@@ -70,4 +77,3 @@
 - Decide UI framework (Tauri/Electron) and shared core library strategy.
 - Build minimal screens: Unlock, Accounts, Check, Report.
 - Ensure identical encryption/storage behavior via shared core.
-

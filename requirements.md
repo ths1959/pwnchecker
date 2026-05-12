@@ -1,7 +1,7 @@
-# Personal Breach Checker (Local-First)
+# PwnChecker (Local-First)
 
 ## 1. Summary
-A local CLI (and optional desktop UI later) that helps you monitor your own accounts for compromise signals while keeping your account list encrypted on disk. The tool supports privacy-preserving checks using k-anonymity where the upstream API supports it (notably Pwned Passwords). Email breach lookups are supported only as an explicit opt-in because common breach APIs require sending the full email address.
+PwnChecker is a local desktop app (with a CLI available for automation later) that monitors an encrypted account list for compromise signals. The app provides local "storage" for a list of emails/usernames plus a single "Check Now" button that runs the full process end-to-end and produces a report. The tool supports privacy-preserving checks using k-anonymity where the upstream API supports it (notably Pwned Passwords). Email breach lookups are supported only as an explicit opt-in because common breach APIs require sending the full email address.
 
 ## 2. Goals / Non-Goals
 
@@ -19,7 +19,7 @@ A local CLI (and optional desktop UI later) that helps you monitor your own acco
 - Sharing/syncing data between devices.
 
 ## 3. Primary Users
-- A single user running the tool locally for their own accounts.
+- A single user running PwnChecker locally for a personal account list.
 - Security-conscious student/practitioner who wants a portfolio-grade privacy-first project.
 
 ## 4. Key Concepts
@@ -27,6 +27,7 @@ A local CLI (and optional desktop UI later) that helps you monitor your own acco
 - Check Run: A timestamped execution that produces results and deltas.
 - k-anonymity check (Passwords): SHA-1 of a secret (password) is computed locally; only the first 5 hex chars are sent; the API returns suffixes; matching occurs locally.
 - Email breach lookup (Opt-in): If enabled, calls a breach API endpoint that requires the full email address (no k-anonymity). This must be explicit and clearly labeled.
+- Hash Cache: A local cache that stores derived identifier hashes (and per-provider query material) so repeated runs can skip recomputation and avoid re-sending the same derived values when nothing changed.
 
 ## 5. Features (v1)
 
@@ -40,9 +41,25 @@ A local CLI (and optional desktop UI later) that helps you monitor your own acco
   - url (optional)
   - tags (optional)
   - created_at, updated_at
+- Cached derived values (encrypted or non-sensitive by design, depending on value type):
+  - identifier_normalized (derived)
+  - identifier_hashes_by_provider (derived)
+  - last_checked_at_by_provider (derived)
 - Local-only export/import (encrypted).
 
-### 5.2 CLI Commands
+### 5.2 Desktop App (Primary UI)
+- Encrypted local storage UI:
+  - Add/edit/remove account entries (service + email/username).
+  - List view with search/filter and redaction by default.
+- Single-action run button:
+  - "Check Now" runs all enabled checks against all stored accounts, persists a new run, and refreshes the report view.
+  - Uses a local hash cache so identifiers already processed can skip re-hashing and (when supported) skip re-sending derived query material if nothing changed.
+- Settings:
+  - Configure API key(s), privacy toggles (email lookup off by default), rate limits, and timeouts.
+- Report:
+  - Latest run summary, per-account details, and "what changed since last run".
+
+### 5.3 CLI Commands (Secondary / Automation-Friendly)
 - init: initialize vault (create DB, set master password).
 - add: add an account.
 - list: list accounts (redacted by default).
@@ -62,10 +79,23 @@ A local CLI (and optional desktop UI later) that helps you monitor your own acco
 - Output: pwn count (if returned), risk level.
 
 2) Email breach lookup (explicit opt-in) (default OFF)
-- Requires API key and consent: "This sends your full email address to the provider."
+- Requires API key and consent: "This sends the full email address to the provider."
 - Output: breached sites, breach dates (if provided), exposed data classes.
 
-### 5.4 Result Management
+### 5.4 Caching (Derived Identifier Cache)
+- Purpose:
+  - Reduce repeated computation (normalization + hashing) across runs.
+  - Avoid re-sending derived query material for unchanged identifiers when the provider/query style supports it.
+- Scope:
+  - Cache stores only derived values (hashes/prefixes) and metadata (provider name, algorithm version, last-checked timestamp).
+  - Cache must not enable reconstructing the plaintext identifier without the vault key (store inside the encrypted DB unless clearly non-sensitive).
+- Invalidation rules:
+  - If identifier_value changes: invalidate all cached entries for that account.
+  - If normalization rules change (versioned): invalidate and recompute.
+  - If provider algorithm or request format changes (versioned): invalidate and recompute.
+  - If user disables a provider: retain cache but do not use it for calls.
+
+### 5.5 Result Management
 - Persist results per run:
   - per account: password-pwned status, email-breached status (if enabled), provider breach identifiers, counts, timestamps.
 - Delta detection:
@@ -74,37 +104,50 @@ A local CLI (and optional desktop UI later) that helps you monitor your own acco
 
 ## 6. User Flows
 
-### 6.1 First-Time Setup
-1. User runs `breach-checker init`
-2. Tool prompts for master password (confirm)
-3. Tool creates encrypted DB and config file
-4. Tool offers to set API key and choose privacy options (email lookup OFF by default)
+### 6.1 First-Time Setup (Desktop)
+1. User opens the app.
+2. App prompts to create/unlock the vault with a master password (confirm on create).
+3. App creates encrypted DB and settings.
+4. App opens Settings to set API key and choose privacy options (email lookup OFF by default).
 
-### 6.2 Add Accounts
-1. `breach-checker add`
-2. Prompts: service name, identifier type, identifier value, optional URL/tags
-3. Saves encrypted record
+### 6.2 Maintain Account Storage (Desktop)
+1. User navigates to Accounts.
+2. User adds/edits entries: service name, identifier type, identifier value, optional URL/tags.
+3. App saves encrypted records and shows them in the list (redacted by default).
 
-### 6.3 Monthly Check (Recommended)
-1. `breach-checker check`
-2. Tool unlocks vault (master password)
-3. If password checks enabled: prompts for each account's password (with "skip" option) or allows targeting accounts
-4. Runs checks, records results
-5. Displays summary: new issues + suggested actions
+### 6.3 Monthly Check (Recommended, One Button)
+1. User clicks "Check Now".
+2. App unlocks vault if needed (master password).
+3. App loads hash cache and determines which identifiers need re-derivation (based on invalidation/version rules).
+4. If password checks enabled: app prompts for each account's password (with "skip" option) or allows targeting accounts.
+5. App runs checks, records results as a new run, and updates the cache metadata.
+5. App displays a summary: new issues + suggested actions.
 
-### 6.4 View Report
-1. `breach-checker report`
-2. Shows latest run summary and per-account statuses
-3. Optionally `--since <date/run_id>` for diffs
+### 6.4 View Report (Desktop)
+1. User navigates to Reports.
+2. App shows latest run summary and per-account statuses.
+3. User can switch to a previous run to see diffs.
 
-## 7. Screens (CLI "Screens")
+## 7. Screens (Desktop App)
+- Vault unlock / create vault
+- Accounts (storage):
+  - Table/list view with add/edit/remove
+  - Redacted identifiers by default; reveal requires explicit action while unlocked
+- Check:
+  - "Check Now" button
+  - Progress and per-account status lines
+  - Optional password prompts (skip supported)
+- Reports:
+  - Run selector (latest by default)
+  - Report table: Service | Identifier (redacted) | Password pwned? | Email breached? | New since last | Notes
+- Settings:
+  - API keys, privacy toggles, rate limits/timeouts
+
+## 7.1 CLI "Screens" (Secondary)
 - Setup screen (init wizard)
 - Add account prompt flow
 - Check progress + per-account status lines
-- Report table:
-  - Service | Identifier (redacted) | Password pwned? | Email breached? | New since last | Notes
-
-(Desktop UI later mirrors these views: Vault Unlock, Accounts, Check Run, Report Detail, Settings.)
+- Report table (same columns as desktop)
 
 ## 8. Technical Requirements
 
@@ -154,4 +197,3 @@ A local CLI (and optional desktop UI later) that helps you monitor your own acco
 - Import from password managers (CSV) with local-only mapping and field redaction.
 - Local-only compromise heuristics:
   - detect reused passwords via local hashing (no network), without storing raw passwords.
-
