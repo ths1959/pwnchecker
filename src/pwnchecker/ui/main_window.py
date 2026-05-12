@@ -593,7 +593,7 @@ class MainWindow(QMainWindow):
 
         # Only clear the report once a run is actually selected. This avoids the
         # "Issues Only" toggle (and other UI actions) blanking the report while a
-        # background check is in progress but the run list has not refreshed yet.
+        # check is in progress but the run list has not refreshed yet.
         self.report_text.setPlainText("")
         results = self._result_repo.list_results_for_run(run_id)
         prev_run_id = self._previous_run_id(run_id)
