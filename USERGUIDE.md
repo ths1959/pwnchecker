@@ -67,6 +67,8 @@ If omitted:
 
 `Check Now` creates a new run and writes results per account.
 
+While checks are running, the status bar shows `Processing checks...` and the cursor switches to a busy cursor. The `Check Now` button is disabled until completion.
+
 Checks performed:
 
 1. Password exposure (HIBP Pwned Passwords)
@@ -121,4 +123,3 @@ python -m pwnchecker remove 1 --yes
 ## Known Limitations
 - No email breach membership lookup (HIBP breached-account search) is included.
 - Results are basic; deltas and advanced reporting are not implemented yet.
-

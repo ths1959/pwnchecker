@@ -8,6 +8,7 @@ from typing import Any
 from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -780,88 +781,99 @@ class MainWindow(QMainWindow):
         if self._run_repo is None or self._result_repo is None or self._cache_repo is None:
             return
 
-        self.statusBar().showMessage("Running checks...", 2500)
-        run_id = self._run_repo.create_run()
+        self.check_now_btn.setEnabled(False)
+        self.statusBar().showMessage("Processing checks...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        QApplication.processEvents()
 
-        pp = PwnedPasswordsClient()
-        for acct in self._accounts:
-            norm = acct.identifier_value.strip().lower()
-            digest_hex = sha1(norm.encode("utf-8")).hexdigest().upper()
-            cache_payload: dict[str, Any] = {
-                "identifier_sha1": digest_hex,
-                "prefix5": digest_hex[:5],
-                "algo": "sha1",
-            }
-            self._cache_repo.upsert(acct.id, "identifier-sha1", 1, cache_payload)
+        run_id = 0
+        try:
+            run_id = self._run_repo.create_run()
 
-            self._result_repo.add_result(
-                run_id=run_id,
-                account_id=acct.id,
-                provider="pwnchecker",
-                status="ok",
-                data={"cache_provider": "identifier-sha1", "cache_version": 1},
-            )
+            pp = PwnedPasswordsClient()
+            for acct in self._accounts:
+                norm = acct.identifier_value.strip().lower()
+                digest_hex = sha1(norm.encode("utf-8")).hexdigest().upper()
+                cache_payload: dict[str, Any] = {
+                    "identifier_sha1": digest_hex,
+                    "prefix5": digest_hex[:5],
+                    "algo": "sha1",
+                }
+                self._cache_repo.upsert(acct.id, "identifier-sha1", 1, cache_payload)
 
-            cached = self._cache_repo.get(acct.id, "pwned-passwords-sha1", 1)
-            sha1_hex: str | None = None
-            if cached is not None and self._is_remember_password_hash_enabled():
-                sha1_hex = str(cached.data.get("sha1") or "").strip()
+                self._result_repo.add_result(
+                    run_id=run_id,
+                    account_id=acct.id,
+                    provider="pwnchecker",
+                    status="ok",
+                    data={"cache_provider": "identifier-sha1", "cache_version": 1},
+                )
 
-            if not sha1_hex:
-                dlg = PasswordDialog(self, service=acct.service)
-                if dlg.exec() != QDialog.Accepted:
-                    self.statusBar().showMessage("Run cancelled", 2500)
-                    break
-                if dlg.skipped():
+                cached = self._cache_repo.get(acct.id, "pwned-passwords-sha1", 1)
+                sha1_hex: str | None = None
+                if cached is not None and self._is_remember_password_hash_enabled():
+                    sha1_hex = str(cached.data.get("sha1") or "").strip()
+
+                if not sha1_hex:
+                    dlg = PasswordDialog(self, service=acct.service)
+                    if dlg.exec() != QDialog.Accepted:
+                        self.statusBar().showMessage("Run cancelled", 2500)
+                        break
+                    if dlg.skipped():
+                        self._result_repo.add_result(
+                            run_id=run_id,
+                            account_id=acct.id,
+                            provider="pwned-passwords",
+                            status="skipped",
+                            data={},
+                        )
+                        continue
+                    sha1_hex = sha1(dlg.get_password().encode("utf-8")).hexdigest().upper()
+                    if self._is_remember_password_hash_enabled():
+                        self._cache_repo.upsert(
+                            acct.id,
+                            "pwned-passwords-sha1",
+                            1,
+                            {"sha1": sha1_hex, "prefix5": sha1_hex[:5], "algo": "sha1"},
+                        )
+
+                try:
+                    res = pp.check_sha1(sha1_hex)
                     self._result_repo.add_result(
                         run_id=run_id,
                         account_id=acct.id,
                         provider="pwned-passwords",
-                        status="skipped",
-                        data={},
+                        status="ok",
+                        data={"count": res.count, "prefix5": res.prefix5},
                     )
-                    continue
-                sha1_hex = sha1(dlg.get_password().encode("utf-8")).hexdigest().upper()
-                if self._is_remember_password_hash_enabled():
-                    self._cache_repo.upsert(
-                        acct.id,
-                        "pwned-passwords-sha1",
-                        1,
-                        {"sha1": sha1_hex, "prefix5": sha1_hex[:5], "algo": "sha1"},
+                except Exception as e:
+                    self._result_repo.add_result(
+                        run_id=run_id,
+                        account_id=acct.id,
+                        provider="pwned-passwords",
+                        status="error",
+                        data={"error": type(e).__name__},
                     )
 
-            try:
-                res = pp.check_sha1(sha1_hex)
+                # No-key domain posture check (email domain security posture).
+                dom = ""
+                if "@" in acct.identifier_value:
+                    dom = acct.identifier_value.split("@", 1)[1].strip().lower()
+                dp = assess_domain(dom)
                 self._result_repo.add_result(
                     run_id=run_id,
                     account_id=acct.id,
-                    provider="pwned-passwords",
-                    status="ok",
-                    data={"count": res.count, "prefix5": res.prefix5},
+                    provider="domain-posture",
+                    status=dp.status,
+                    data={"domain": dp.domain, "message": dp.message},
                 )
-            except Exception as e:
-                self._result_repo.add_result(
-                    run_id=run_id,
-                    account_id=acct.id,
-                    provider="pwned-passwords",
-                    status="error",
-                    data={"error": type(e).__name__},
-                )
-
-            # No-key domain posture check (email domain security posture).
-            dom = ""
-            if "@" in acct.identifier_value:
-                dom = acct.identifier_value.split("@", 1)[1].strip().lower()
-            dp = assess_domain(dom)
-            self._result_repo.add_result(
-                run_id=run_id,
-                account_id=acct.id,
-                provider="domain-posture",
-                status=dp.status,
-                data={"domain": dp.domain, "message": dp.message},
-            )
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.check_now_btn.setEnabled(True)
+            self.statusBar().showMessage("Ready", 2500)
 
         self._refresh_runs()
         self._refresh_results()
         self.tabs.setCurrentWidget(self.reports_tab)
-        self.statusBar().showMessage(f"Run #{run_id} completed", 3500)
+        if run_id:
+            self.statusBar().showMessage(f"Run #{run_id} completed", 3500)
