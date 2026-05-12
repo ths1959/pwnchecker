@@ -10,6 +10,7 @@ PwnChecker is a local desktop app (with a CLI available for automation) that mon
 - Check runs + results persistence implemented; report history stored locally.
 - Reports are rendered as a textual summary (not a grid/table UI).
 - Reports include run summaries, severity grouping, and per-account deltas ("New since last run"), plus an "Issues only" filter toggle.
+- `Check Now` runs in the background with progress and Cancel (UI remains responsive).
 - Batch delete implemented:
   - Accounts: checkbox selection + Delete
   - Runs: checkbox selection + Delete Run

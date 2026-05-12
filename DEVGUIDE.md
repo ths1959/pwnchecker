@@ -85,7 +85,7 @@ Sensitive fields are encrypted using AEAD (AES-GCM) with a key derived from the 
   - report redaction toggle (applies immediately by re-rendering report)
   - remember password hash toggle (controls whether derived SHA1 is stored/used)
   - unsaved-changes indicator
-- During `Check Now`, the status bar switches to "Processing checks...", a busy cursor is shown, and the button is disabled until completion.
+- During `Check Now`, checks run in a background thread. The status bar shows progress like `Processing (i/n) - Checking ...`, a busy cursor is shown, `Check Now` is disabled, and `Cancel` is enabled.
 
 ## Adding a New Check
 1. Create a provider module under `src/pwnchecker/providers/`.

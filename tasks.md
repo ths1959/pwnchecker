@@ -68,11 +68,12 @@
 - Add "Issues only" filter toggle in Reports.
 - Add "New since last run" deltas (password exposure count changes; domain posture changes).
 
-## Phase 7: Hardening & DX
-- Add rate limiting + retry/backoff controls.
-- Add structured logging and --verbose.
-- Add corruption recovery guidance (detect + actionable error messages).
-- Add import/export (encrypted) with tests.
+## Phase 7: Non-Blocking Checks UX
+- Run `Check Now` in a background thread (no UI freeze).
+- Show progress in the status bar (`Processing (i/n) - ...`).
+- Add `Cancel` to stop an in-progress run (partial results preserved).
+- Ensure no cross-thread SQLite connection use (open DB in worker thread).
+- Update GUI integration tests to wait for async completion.
 
 ## Phase 8: Optional Desktop UI (Future Track)
 - Decide UI framework (Tauri/Electron) and shared core library strategy.

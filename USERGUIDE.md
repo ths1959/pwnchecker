@@ -67,7 +67,13 @@ If omitted:
 
 `Check Now` creates a new run and writes results per account.
 
-While checks are running, the status bar shows `Processing checks...` and the cursor switches to a busy cursor. The `Check Now` button is disabled until completion.
+While checks are running:
+- UI stays responsive.
+- Status bar shows progress like `Processing (i/n) - Checking ...`.
+- Cursor switches to a busy cursor.
+- `Check Now` is disabled and `Cancel` is enabled.
+
+Click `Cancel` to stop processing early. Partial results (for accounts already processed) remain stored in the run history, and the status shows `Ready (cancelled)` after cleanup.
 
 Checks performed:
 

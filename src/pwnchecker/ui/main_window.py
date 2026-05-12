@@ -37,6 +37,7 @@ from ..storage.results import ResultRepo
 from ..storage.runs import RunRepo
 from ..storage.settings import SettingsRepo
 from ..storage.vault import VaultLockedError, VaultSession, create_vault, open_vault, vault_exists
+from .check_worker import CheckItem, CheckThread, CheckWorker
 from .password_dialog import PasswordDialog
 from .vault_dialog import VaultDialog
 
@@ -117,6 +118,9 @@ class MainWindow(QMainWindow):
         self._run_serial_by_id: dict[int, int] = {}
         self._settings_baseline: dict[str, str] = {}
 
+        self._check_thread: CheckThread | None = None
+        self._check_worker: CheckWorker | None = None
+
         root = QWidget()
         root_layout = QVBoxLayout(root)
         root_layout.setContentsMargins(14, 14, 14, 10)
@@ -145,8 +149,14 @@ class MainWindow(QMainWindow):
         self.check_now_btn.setObjectName("check_now_btn")
         self.check_now_btn.clicked.connect(self._on_check_now)
 
+        self.cancel_check_btn = QPushButton("Cancel")
+        self.cancel_check_btn.setObjectName("cancel_check_btn")
+        self.cancel_check_btn.setEnabled(False)
+        self.cancel_check_btn.clicked.connect(self._on_cancel_check)
+
         header.addLayout(title_block)
         header.addStretch(1)
+        header.addWidget(self.cancel_check_btn)
         header.addWidget(self.check_now_btn)
 
         self.tabs = QTabWidget()
@@ -992,102 +1002,84 @@ class MainWindow(QMainWindow):
     def _on_check_now(self) -> None:
         if self._run_repo is None or self._result_repo is None or self._cache_repo is None:
             return
+        if self._session is None:
+            return
+        if self._check_thread is not None:
+            return
 
-        self.check_now_btn.setEnabled(False)
-        self.statusBar().showMessage("Processing checks...")
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        QApplication.processEvents()
-
-        run_id = 0
-        try:
-            run_id = self._run_repo.create_run()
-
-            pp = PwnedPasswordsClient()
-            for acct in self._accounts:
-                norm = acct.identifier_value.strip().lower()
-                digest_hex = sha1(norm.encode("utf-8")).hexdigest().upper()
-                cache_payload: dict[str, Any] = {
-                    "identifier_sha1": digest_hex,
-                    "prefix5": digest_hex[:5],
-                    "algo": "sha1",
-                }
-                self._cache_repo.upsert(acct.id, "identifier-sha1", 1, cache_payload)
-
-                self._result_repo.add_result(
-                    run_id=run_id,
-                    account_id=acct.id,
-                    provider="pwnchecker",
-                    status="ok",
-                    data={"cache_provider": "identifier-sha1", "cache_version": 1},
-                )
-
+        items: list[CheckItem] = []
+        for acct in self._accounts:
+            password_sha1: str | None = None
+            if self._is_remember_password_hash_enabled():
                 cached = self._cache_repo.get(acct.id, "pwned-passwords-sha1", 1)
-                sha1_hex: str | None = None
-                if cached is not None and self._is_remember_password_hash_enabled():
-                    sha1_hex = str(cached.data.get("sha1") or "").strip()
+                if cached is not None:
+                    password_sha1 = str(cached.data.get("sha1") or "").strip() or None
 
-                if not sha1_hex:
-                    dlg = PasswordDialog(self, service=acct.service)
-                    if dlg.exec() != QDialog.Accepted:
-                        self.statusBar().showMessage("Run cancelled", 2500)
-                        break
-                    if dlg.skipped():
-                        self._result_repo.add_result(
-                            run_id=run_id,
-                            account_id=acct.id,
-                            provider="pwned-passwords",
-                            status="skipped",
-                            data={},
-                        )
-                        continue
-                    sha1_hex = sha1(dlg.get_password().encode("utf-8")).hexdigest().upper()
+            if password_sha1 is None:
+                dlg = PasswordDialog(self, service=acct.service)
+                if dlg.exec() != QDialog.Accepted:
+                    self.statusBar().showMessage("Run cancelled", 2500)
+                    return
+                if dlg.skipped():
+                    password_sha1 = None
+                else:
+                    password_sha1 = sha1(dlg.get_password().encode("utf-8")).hexdigest().upper()
                     if self._is_remember_password_hash_enabled():
                         self._cache_repo.upsert(
                             acct.id,
                             "pwned-passwords-sha1",
                             1,
-                            {"sha1": sha1_hex, "prefix5": sha1_hex[:5], "algo": "sha1"},
+                            {"sha1": password_sha1, "prefix5": password_sha1[:5], "algo": "sha1"},
                         )
 
-                try:
-                    res = pp.check_sha1(sha1_hex)
-                    self._result_repo.add_result(
-                        run_id=run_id,
-                        account_id=acct.id,
-                        provider="pwned-passwords",
-                        status="ok",
-                        data={"count": res.count, "prefix5": res.prefix5},
-                    )
-                except Exception as e:
-                    self._result_repo.add_result(
-                        run_id=run_id,
-                        account_id=acct.id,
-                        provider="pwned-passwords",
-                        status="error",
-                        data={"error": type(e).__name__},
-                    )
-
-                # No-key domain posture check (email domain security posture).
-                dom = ""
-                if "@" in acct.identifier_value:
-                    dom = acct.identifier_value.split("@", 1)[1].strip().lower()
-                dp = assess_domain(dom)
-                self._result_repo.add_result(
-                    run_id=run_id,
+            items.append(
+                CheckItem(
                     account_id=acct.id,
-                    provider="domain-posture",
-                    status=dp.status,
-                    data={"domain": dp.domain, "message": dp.message},
+                    service=acct.service,
+                    identifier=acct.identifier_value,
+                    password_sha1=password_sha1,
                 )
-        finally:
-            QApplication.restoreOverrideCursor()
-            self.check_now_btn.setEnabled(True)
-            self.statusBar().showMessage("Ready", 2500)
+            )
+
+        self._check_worker = CheckWorker(self._session, items)
+        self._check_thread = CheckThread(self._check_worker)
+        self._check_worker.progress.connect(self._on_check_progress)
+        self._check_worker.finished.connect(self._on_check_finished)
+
+        self.check_now_btn.setEnabled(False)
+        self.cancel_check_btn.setEnabled(True)
+        self.statusBar().showMessage("Processing checks...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+
+        self._check_thread.start()
+
+    def _on_cancel_check(self) -> None:
+        if self._check_worker is not None:
+            self._check_worker.cancel()
+            self.cancel_check_btn.setEnabled(False)
+            self.statusBar().showMessage("Cancelling...", 2500)
+
+    def _on_check_progress(self, i: int, total: int, msg: str) -> None:
+        self.statusBar().showMessage(f"Processing ({i}/{total}) - {msg}")
+
+    def _on_check_finished(self, run_id: int, cancelled: bool, _msg: str) -> None:
+        QApplication.restoreOverrideCursor()
+        self.check_now_btn.setEnabled(True)
+        self.cancel_check_btn.setEnabled(False)
+
+        # Clean up thread references.
+        if self._check_thread is not None:
+            self._check_thread.quit()
+            self._check_thread.wait(2000)
+        self._check_thread = None
+        self._check_worker = None
 
         self._refresh_runs()
         self._refresh_results()
         self.tabs.setCurrentWidget(self.reports_tab)
-        if run_id:
-            serial = self._run_serial_by_id.get(run_id, 0)
-            label = f"Run {serial}" if serial else f"Run #{run_id}"
-            self.statusBar().showMessage(f"{label} completed", 3500)
+        if cancelled:
+            self.statusBar().showMessage("Ready (cancelled)", 3500)
+            return
+        serial = self._run_serial_by_id.get(run_id, 0)
+        label = f"Run {serial}" if serial else f"Run #{run_id}"
+        self.statusBar().showMessage(f"{label} completed", 3500)

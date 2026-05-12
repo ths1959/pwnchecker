@@ -18,7 +18,7 @@ def test_gui_launches_and_check_now_creates_run(qtbot, monkeypatch, tmp_path) ->
 
     qtbot.mouseClick(win.check_now_btn, Qt.LeftButton)
 
-    assert win.runs_list.count() == 1
+    qtbot.waitUntil(lambda: win.runs_list.count() == 1, timeout=5000)
 
 
 def test_accounts_add_edit_delete_non_ui_helpers(qtbot, monkeypatch, tmp_path) -> None:
