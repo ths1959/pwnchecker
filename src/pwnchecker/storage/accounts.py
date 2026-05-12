@@ -38,7 +38,7 @@ class AccountRepo:
               created_at_utc,
               updated_at_utc
             FROM accounts
-            ORDER BY service, id
+            ORDER BY id ASC
             """
         )
         out: list[Account] = []

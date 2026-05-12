@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QProgressBar,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -114,12 +115,15 @@ class MainWindow(QMainWindow):
 
         # UI selection state for batch actions.
         self._checked_account_ids: set[int] = set()
+        self._acct_sort_col: int | None = None
+        self._acct_sort_order: Qt.SortOrder = Qt.AscendingOrder
         self._checked_run_ids: set[int] = set()
         self._run_serial_by_id: dict[int, int] = {}
         self._settings_baseline: dict[str, str] = {}
 
         self._check_thread: CheckThread | None = None
         self._check_worker: CheckWorker | None = None
+        self._check_in_progress = False
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
@@ -174,6 +178,13 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.tabs)
 
         self.setCentralWidget(root)
+
+        self._check_progress = QProgressBar()
+        self._check_progress.setObjectName("check_progress")
+        self._check_progress.setTextVisible(False)
+        self._check_progress.setMinimumWidth(180)
+        self._check_progress.hide()
+        self.statusBar().addPermanentWidget(self._check_progress)
         self.statusBar().showMessage("Ready")
 
         if self._repo is None:
@@ -187,6 +198,7 @@ class MainWindow(QMainWindow):
 
         self._load_settings_into_ui()
         self._refresh_accounts_table()
+        self._apply_accounts_sort()
         self._refresh_runs()
         self._refresh_results()
 
@@ -233,18 +245,72 @@ class MainWindow(QMainWindow):
         self.accounts_table.setObjectName("accounts_table")
         self.accounts_table.setColumnCount(6)
         self.accounts_table.setHorizontalHeaderLabels(
-            ["", "No.", "Service", "Identifier", "Created", "Last Updated"]
+            ["", "No.", "Service  ^v", "Identifier  ^v", "Created  ^v", "Last Updated  ^v"]
         )
         self.accounts_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.accounts_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.accounts_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.accounts_table.setAlternatingRowColors(True)
         self.accounts_table.verticalHeader().setVisible(False)
+        # Default order is insertion order (id asc) from storage. Sorting is enabled only via
+        # header clicks for selected columns (Service/Identifier/Created/Last Updated).
+        self.accounts_table.setSortingEnabled(False)
+        hdr = self.accounts_table.horizontalHeader()
+        hdr.setSectionsClickable(True)
+        hdr.sectionClicked.connect(self._on_accounts_header_clicked)
+        for c in (2, 3, 4, 5):
+            self.accounts_table.horizontalHeaderItem(c).setToolTip("Click to sort")
         self.accounts_table.itemSelectionChanged.connect(self._on_accounts_selection_changed)
         self.accounts_table.cellClicked.connect(self._on_account_cell_clicked)
         layout.addLayout(controls)
         layout.addWidget(self.accounts_table)
         return w
+
+    def _on_accounts_header_clicked(self, col: int) -> None:
+        # Sorting is allowed only for Service/Identifier/Created/Last Updated.
+        if col not in (2, 3, 4, 5):
+            return
+        if self._acct_sort_col == col:
+            self._acct_sort_order = (
+                Qt.DescendingOrder if self._acct_sort_order == Qt.AscendingOrder else Qt.AscendingOrder
+            )
+        else:
+            self._acct_sort_col = col
+            self._acct_sort_order = Qt.AscendingOrder
+        self.accounts_table.sortItems(col, self._acct_sort_order)
+        self._renumber_accounts_table()
+        self._persist_accounts_sort()
+
+    def _renumber_accounts_table(self) -> None:
+        # "No." is a display-only serial number: always 1..N top-to-bottom,
+        # regardless of sorting or filtering.
+        rows = self.accounts_table.rowCount()
+        for r in range(rows):
+            it = self.accounts_table.item(r, 1)
+            if it is None:
+                it = QTableWidgetItem()
+                self.accounts_table.setItem(r, 1, it)
+            it.setText(str(r + 1))
+
+    def _persist_accounts_sort(self) -> None:
+        if self._settings_repo is None:
+            return
+        col = self._acct_sort_col
+        if col not in (2, 3, 4, 5):
+            self._settings_repo.set("accounts_sort_col", "")
+            self._settings_repo.set("accounts_sort_order", "asc")
+            return
+        self._settings_repo.set("accounts_sort_col", str(int(col)))
+        self._settings_repo.set(
+            "accounts_sort_order",
+            "desc" if self._acct_sort_order == Qt.DescendingOrder else "asc",
+        )
+
+    def _apply_accounts_sort(self) -> None:
+        col = self._acct_sort_col
+        if col in (2, 3, 4, 5):
+            self.accounts_table.sortItems(col, self._acct_sort_order)
+            self._renumber_accounts_table()
 
     def _build_reports_tab(self) -> QWidget:
         w = QWidget()
@@ -298,6 +364,32 @@ class MainWindow(QMainWindow):
         layout.addLayout(row)
         return w
 
+    def _set_check_ui_locked(self, locked: bool) -> None:
+        self._check_in_progress = locked
+
+        # Only Cancel remains interactive during checks.
+        self.check_now_btn.setEnabled(not locked)
+        self.cancel_check_btn.setEnabled(locked)
+
+        # Tabs: keep Reports accessible so progress/output is visible.
+        for i in range(self.tabs.count()):
+            self.tabs.setTabEnabled(i, (self.tabs.widget(i) == self.reports_tab) or (not locked))
+
+        # Accounts tab controls.
+        for w in ("filter_edit", "add_btn", "edit_btn", "delete_btn", "accounts_table"):
+            if hasattr(self, w):
+                getattr(self, w).setEnabled(not locked)
+
+        # Reports actions should not mutate/refresh while checks are running.
+        self.issues_only_btn.setEnabled(not locked)
+        self.delete_run_btn.setEnabled((not locked) and bool(self._checked_run_ids))
+        self.runs_list.setEnabled(not locked)
+
+        # Settings tab controls.
+        for w in ("redact_chk", "remember_pw_chk", "save_settings_btn"):
+            if hasattr(self, w):
+                getattr(self, w).setEnabled(not locked)
+
     def _build_settings_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
@@ -349,6 +441,21 @@ class MainWindow(QMainWindow):
             return
         redact = (self._settings_repo.get("report_redact") or "1").strip() != "0"
         remember = (self._settings_repo.get("remember_pw_hash") or "1").strip() != "0"
+
+        # Optional persisted accounts sort preferences. Sorting is allowed only for
+        # columns (2,3,4,5). Missing/invalid values fall back to insertion order.
+        sort_col_raw = (self._settings_repo.get("accounts_sort_col") or "").strip()
+        sort_order_raw = (self._settings_repo.get("accounts_sort_order") or "").strip().lower()
+        sort_col: int | None = None
+        try:
+            if sort_col_raw:
+                sort_col = int(sort_col_raw)
+        except Exception:
+            sort_col = None
+        if sort_col not in (2, 3, 4, 5):
+            sort_col = None
+        self._acct_sort_col = sort_col
+        self._acct_sort_order = Qt.DescendingOrder if sort_order_raw == "desc" else Qt.AscendingOrder
         self._settings_baseline = {
             "report_redact": "1" if redact else "0",
             "remember_pw_hash": "1" if remember else "0",
@@ -404,6 +511,7 @@ class MainWindow(QMainWindow):
             cb = QTableWidgetItem("")
             cb.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable | Qt.ItemIsSelectable)
             cb.setCheckState(Qt.Checked if acct.id in self._checked_account_ids else Qt.Unchecked)
+            cb.setData(Qt.ItemDataRole.UserRole, acct.id)
             self.accounts_table.setItem(i, 0, cb)
             # Serial number for display only (stable within the current sorted/filtered view).
             self.accounts_table.setItem(i, 1, QTableWidgetItem(str(i + 1)))
@@ -416,6 +524,8 @@ class MainWindow(QMainWindow):
                 QTableWidgetItem(self._fmt_gmt8(acct.updated_at_utc)),
             )
         self.accounts_table.resizeColumnsToContents()
+        self._renumber_accounts_table()
+        self._apply_accounts_sort()
         # Avoid Qt defaulting a "current cell" highlight that looks like a selection.
         self.accounts_table.setCurrentCell(-1, -1)
         self._on_accounts_selection_changed()
@@ -477,10 +587,14 @@ class MainWindow(QMainWindow):
         return runs[row].id
 
     def _refresh_results(self) -> None:
-        self.report_text.setPlainText("")
         run_id = self._selected_run_id()
         if run_id is None or self._result_repo is None:
             return
+
+        # Only clear the report once a run is actually selected. This avoids the
+        # "Issues Only" toggle (and other UI actions) blanking the report while a
+        # background check is in progress but the run list has not refreshed yet.
+        self.report_text.setPlainText("")
         results = self._result_repo.list_results_for_run(run_id)
         prev_run_id = self._previous_run_id(run_id)
         prev_results = (
@@ -830,12 +944,11 @@ class MainWindow(QMainWindow):
         # Checkbox column toggles batch-selection state.
         if col != 0:
             return
-        visible = self._visible_accounts()
-        if not (0 <= row < len(visible)):
-            return
-        acct_id = visible[row].id
         item = self.accounts_table.item(row, 0)
         if item is None:
+            return
+        acct_id = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(acct_id, int):
             return
         if item.checkState() == Qt.Checked:
             self._checked_account_ids.add(acct_id)
@@ -861,19 +974,16 @@ class MainWindow(QMainWindow):
             return None
 
         row = sel.selectedRows()[0].row()
-        flt = self.filter_edit.text().strip().lower()
-        if not flt:
-            return row
-
-        # Map filtered row -> index in _accounts (stable source of truth).
-        filtered = [
-            (idx, a)
-            for idx, a in enumerate(self._accounts)
-            if flt in a.service.lower() or flt in a.identifier_value.lower()
-        ]
-        if row < 0 or row >= len(filtered):
+        item = self.accounts_table.item(row, 0)
+        if item is None:
             return None
-        return filtered[row][0]
+        acct_id = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(acct_id, int):
+            return None
+        for idx, a in enumerate(self._accounts):
+            if a.id == acct_id:
+                return idx
+        return None
 
     def _on_add_account(self) -> None:
         dlg = AccountDialog(self, title="Add Account")
@@ -1008,7 +1118,7 @@ class MainWindow(QMainWindow):
             return
 
         items: list[CheckItem] = []
-        for acct in self._accounts:
+        for acct in self._accounts_in_table_order():
             password_sha1: str | None = None
             if self._is_remember_password_hash_enabled():
                 cached = self._cache_repo.get(acct.id, "pwned-passwords-sha1", 1)
@@ -1046,12 +1156,34 @@ class MainWindow(QMainWindow):
         self._check_worker.progress.connect(self._on_check_progress)
         self._check_worker.finished.connect(self._on_check_finished)
 
-        self.check_now_btn.setEnabled(False)
-        self.cancel_check_btn.setEnabled(True)
+        self._set_check_ui_locked(True)
         self.statusBar().showMessage("Processing checks...")
         QApplication.setOverrideCursor(Qt.WaitCursor)
+        self._check_progress.setRange(0, len(items))
+        self._check_progress.setValue(0)
+        self._check_progress.show()
+
+        # Show progress in Reports while checks run.
+        self.tabs.setCurrentWidget(self.reports_tab)
+        self.report_text.setPlainText("Processing...\n")
 
         self._check_thread.start()
+
+    def _accounts_in_table_order(self) -> list[Account]:
+        # Use the current table order (sort/filter) as the check sequence.
+        acct_by_id = {a.id: a for a in self._accounts}
+        out: list[Account] = []
+        for row in range(self.accounts_table.rowCount()):
+            item = self.accounts_table.item(row, 0)
+            if item is None:
+                continue
+            acct_id = item.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(acct_id, int):
+                continue
+            acct = acct_by_id.get(acct_id)
+            if acct is not None:
+                out.append(acct)
+        return out
 
     def _on_cancel_check(self) -> None:
         if self._check_worker is not None:
@@ -1061,11 +1193,16 @@ class MainWindow(QMainWindow):
 
     def _on_check_progress(self, i: int, total: int, msg: str) -> None:
         self.statusBar().showMessage(f"Processing ({i}/{total}) - {msg}")
+        self._check_progress.setRange(0, total)
+        self._check_progress.setValue(i)
+        if self._check_in_progress:
+            self.report_text.append(f"[{i}/{total}] {msg}")
 
     def _on_check_finished(self, run_id: int, cancelled: bool, _msg: str) -> None:
         QApplication.restoreOverrideCursor()
-        self.check_now_btn.setEnabled(True)
-        self.cancel_check_btn.setEnabled(False)
+        self._check_progress.hide()
+        self._check_progress.setValue(0)
+        self._set_check_ui_locked(False)
 
         # Clean up thread references.
         if self._check_thread is not None:
