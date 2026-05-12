@@ -125,3 +125,13 @@ class AccountRepo:
     def delete_account(self, account_id: int) -> None:
         self._s.conn.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
         self._s.conn.commit()
+
+    def delete_accounts(self, account_ids: list[int]) -> None:
+        if not account_ids:
+            return
+        placeholders = ",".join("?" for _ in account_ids)
+        self._s.conn.execute(
+            f"DELETE FROM accounts WHERE id IN ({placeholders})",
+            account_ids,
+        )
+        self._s.conn.commit()

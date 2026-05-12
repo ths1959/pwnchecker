@@ -50,3 +50,16 @@ def test_accounts_crud_encrypts_identifier(monkeypatch, tmp_path) -> None:
 
     repo.delete_account(acct_id)
     assert repo.list_accounts() == []
+
+
+def test_accounts_batch_delete(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("PWNCHECKER_DATA_DIR", str(tmp_path))
+    session = create_vault(vault_db_path(), "pw123")
+    repo = AccountRepo(session)
+
+    a1 = repo.add_account("Svc1", "email", "a@example.com")
+    a2 = repo.add_account("Svc2", "email", "b@example.com")
+    assert len(repo.list_accounts()) == 2
+
+    repo.delete_accounts([a1, a2])
+    assert repo.list_accounts() == []
