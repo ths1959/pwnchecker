@@ -85,6 +85,11 @@ The Reports tab shows:
 - Run history (left)
 - Textual summary for the selected run (right)
 
+### Status vs Findings
+Each account section contains:
+- `Status`: a single overall classification (`OK`, `ATTENTION`, `UNKNOWN`, `ERROR`, `SKIPPED`).
+- `Findings`: one or more triggered findings (for example: password exposed, domain needs attention).
+
 ### Run Serialization
 Runs are labeled `Run 1..N` based on the current run history. If all runs are deleted, numbering restarts at `Run 1`.
 

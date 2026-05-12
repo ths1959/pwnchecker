@@ -62,13 +62,11 @@
 - Add tests (mock DNS resolver).
 
 ## Phase 6: Reporting Polish
-- Improve report formatting (stable columns, sorting).
-- Add filters: --only-new, --tag, --service.
-- Add exit codes:
-  - 0 no new issues
-  - 1 new issues found
-  - 2 run incomplete / errors
-- Add snapshot tests for report output stability.
+- Improve report formatting (textual report output).
+- Add run summary header (OK/Attention/Unknown/Error/Skipped counts).
+- Add severity grouping (Error/Unknown/Attention/Skipped/OK).
+- Add "Issues only" filter toggle in Reports.
+- Add "New since last run" deltas (password exposure count changes; domain posture changes).
 
 ## Phase 7: Hardening & DX
 - Add rate limiting + retry/backoff controls.

@@ -9,6 +9,7 @@ PwnChecker is a local desktop app (with a CLI available for automation) that mon
 - Accounts CRUD implemented in GUI and CLI.
 - Check runs + results persistence implemented; report history stored locally.
 - Reports are rendered as a textual summary (not a grid/table UI).
+- Reports include run summaries, severity grouping, and per-account deltas ("New since last run"), plus an "Issues only" filter toggle.
 - Batch delete implemented:
   - Accounts: checkbox selection + Delete
   - Runs: checkbox selection + Delete Run
@@ -73,6 +74,7 @@ PwnChecker is a local desktop app (with a CLI available for automation) that mon
   - Remember password hash toggle (controls reuse of stored derived password hash between runs).
 - Report:
   - Local run history with textual per-run, per-account summaries.
+  - Report includes a single overall Status per account and a separate Findings line when multiple findings apply.
 
 ### 5.3 CLI Commands (Secondary / Automation-Friendly)
 - init: initialize vault (create DB, set master password).
@@ -110,8 +112,7 @@ PwnChecker is a local desktop app (with a CLI available for automation) that mon
 - Persist results per run:
   - per account: provider statuses and counts/timestamps (for example: password exposure count; domain posture status/message).
 - Delta detection:
-  - new breaches since last run
-  - newly pwned password counts increased (if applicable)
+  - "New since last run" deltas for password exposure count changes and domain posture changes.
 
 ## 6. User Flows
 
