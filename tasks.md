@@ -1,5 +1,9 @@
 # Implementation Tasks (Foundation -> Advanced)
 
+## Status Notes (Current Repo)
+- Desktop UI is implemented (not deferred).
+- Phase 5 is implemented as domain security posture checks (no key); email breach lookup is not included.
+
 ## Phase 0: Repo & Tooling Foundation
 - Create src/ package skeleton with importable module.
 - Add dependency management (pyproject.toml) and basic CLI entrypoint.
@@ -51,12 +55,11 @@
 - Store only what is needed for reporting (counts, timestamps), not secrets.
 - Add unit tests for parsing and matching; integration tests with mocked HTTP.
 
-## Phase 5: Optional Email Breach Lookup (Explicit Opt-In)
-- Add config flag email_lookup_enabled default OFF.
-- Add API key storage strategy (encrypted).
-- Implement provider client for email breach endpoint (only when enabled).
-- Add UX copy that clearly states "full email is sent".
-- Add tests ensuring disabled mode never calls network.
+## Phase 5: Domain Security Posture Checks (No-Key)
+- Implement DNS-based posture checks for email domains (MX/SPF/DMARC).
+- Add intuitive user-facing messages and recommended actions.
+- Run posture checks as part of `Check Now` and persist results per run.
+- Add tests (mock DNS resolver).
 
 ## Phase 6: Reporting Polish
 - Improve report formatting (stable columns, sorting).

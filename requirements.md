@@ -1,7 +1,21 @@
 # PwnChecker (Local-First)
 
 ## 1. Summary
-PwnChecker is a local desktop app (with a CLI available for automation later) that monitors an encrypted account list for compromise signals. The app provides local "storage" for a list of emails/usernames plus a single "Check Now" button that runs the full process end-to-end and produces a report. The tool supports privacy-preserving checks using k-anonymity where the upstream API supports it (notably Pwned Passwords). Email breach lookups are supported only as an explicit opt-in because common breach APIs require sending the full email address.
+PwnChecker is a local desktop app (with a CLI available for automation) that monitors an encrypted account list for compromise signals. The app provides local "storage" for a list of emails plus a single "Check Now" button that runs checks end-to-end and produces a local report. The tool supports privacy-preserving checks using k-anonymity where the upstream API supports it (notably Pwned Passwords).
+
+## 1.1 Current Implementation Status (Repo)
+- Desktop app implemented (PySide6).
+- Encrypted SQLite vault implemented (master password, field-level encryption).
+- Accounts CRUD implemented in GUI and CLI.
+- Check runs + results persistence implemented; report history stored locally.
+- Reports are rendered as a textual summary (not a grid/table UI).
+- Batch delete implemented:
+  - Accounts: checkbox selection + Delete
+  - Runs: checkbox selection + Delete Run
+- Provider checks implemented:
+  - Pwned Passwords (HIBP) k-anonymity password exposure check
+  - Domain security posture check (MX/SPF/DMARC) per email domain
+- Email breach lookup by email address is not included.
 
 ## 2. Goals / Non-Goals
 
@@ -26,8 +40,8 @@ PwnChecker is a local desktop app (with a CLI available for automation later) th
 - Account: A record representing a login identity (email or username) and optional notes (service name, URL, tags).
 - Check Run: A timestamped execution that produces results and deltas.
 - k-anonymity check (Passwords): SHA-1 of a secret (password) is computed locally; only the first 5 hex chars are sent; the API returns suffixes; matching occurs locally.
-- Email breach lookup (Opt-in): If enabled, calls a breach API endpoint that requires the full email address (no k-anonymity). This must be explicit and clearly labeled.
 - Hash Cache: A local cache that stores derived identifier hashes (and per-provider query material) so repeated runs can skip recomputation and avoid re-sending the same derived values when nothing changed.
+- Domain Posture Check: A DNS-based check on the domain part of an email address to estimate spoofing-resistance posture (MX/SPF/DMARC).
 
 ## 5. Features (v1)
 
@@ -55,9 +69,10 @@ PwnChecker is a local desktop app (with a CLI available for automation later) th
   - "Check Now" runs all enabled checks against all stored accounts, persists a new run, and refreshes the report view.
   - Uses a local hash cache so identifiers already processed can skip re-hashing and (when supported) skip re-sending derived query material if nothing changed.
 - Settings:
-  - Configure API key(s), privacy toggles (email lookup off by default), rate limits, and timeouts.
+  - Report redaction toggle (redact identifiers in Reports).
+  - Remember password hash toggle (controls reuse of stored derived password hash between runs).
 - Report:
-  - Latest run summary, per-account details, and "what changed since last run".
+  - Local run history with textual per-run, per-account summaries.
 
 ### 5.3 CLI Commands (Secondary / Automation-Friendly)
 - init: initialize vault (create DB, set master password).
@@ -65,22 +80,18 @@ PwnChecker is a local desktop app (with a CLI available for automation later) th
 - list: list accounts (redacted by default).
 - show <id>: show one account (requires explicit --reveal for identifier).
 - remove <id>
-- check: run breach checks and store results.
-- report: show latest results + diffs from previous run.
-- history: list previous runs.
-- config: set API key, toggles, rate limits.
+- check/report/history/config: planned; not all commands are implemented yet.
 
 ### 5.3 Checking Capabilities
 
 1) Pwned Passwords (k-anonymity) (default ON if user provides a "secret to check")
 - User can provide per-account a password to check at run-time (interactive prompt) or store a derived token:
   - Preferred: prompt at check time (no secret stored).
-  - Optional: store a salted hash for local correlation only, but still compute SHA-1 from provided password at runtime for the API query.
-- Output: pwn count (if returned), risk level.
+  - Optional: store derived SHA-1(password) encrypted for reuse (controlled by a Settings toggle).
+- Output: pwn count (if returned).
 
-2) Email breach lookup (explicit opt-in) (default OFF)
-- Requires API key and consent: "This sends the full email address to the provider."
-- Output: breached sites, breach dates (if provided), exposed data classes.
+2) Domain Security Posture (no-key)
+- Uses DNS queries for MX/SPF/DMARC and returns a user-facing status with recommended actions.
 
 ### 5.4 Caching (Derived Identifier Cache)
 - Purpose:
@@ -97,7 +108,7 @@ PwnChecker is a local desktop app (with a CLI available for automation later) th
 
 ### 5.5 Result Management
 - Persist results per run:
-  - per account: password-pwned status, email-breached status (if enabled), provider breach identifiers, counts, timestamps.
+  - per account: provider statuses and counts/timestamps (for example: password exposure count; domain posture status/message).
 - Delta detection:
   - new breaches since last run
   - newly pwned password counts increased (if applicable)

@@ -35,6 +35,7 @@
 
 ## 4. Tech Stack Decisions (v1)
 - Language: Python.
+- Desktop UI: PySide6 (Qt).
 - CLI framework: Typer (or Click) with rich prompts.
 - HTTP: httpx.
 - SQLite access: sqlite3 + thin repository layer (or SQLAlchemy later if needed).
@@ -48,12 +49,12 @@
   - mypy (optional but recommended once types stabilize)
 
 ## 5. Folder Structure Conventions
-- src/breach_checker/
-  - cli/
-  - core/
-  - storage/
+- src/pwnchecker/
+  - cli.py
+  - gui.py
   - providers/
-  - util/
+  - storage/
+  - ui/
 - tests/
   - unit/ (pure logic)
   - integration/ (DB + crypto, but no network)
