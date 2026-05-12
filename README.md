@@ -19,6 +19,13 @@ Email breach membership lookup by email address is not included.
 
 ## Run
 
+## Windows EXE
+GitHub Releases include a Windows build as `PwnChecker.exe` (uploaded as a `.zip`).
+
+1. Download the latest `PwnChecker-windows.zip` from Releases.
+2. Extract the zip.
+3. Run `PwnChecker.exe`.
+
 ```powershell
 python -m pip install -e .[dev]
 python -m pwnchecker.gui
