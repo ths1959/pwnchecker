@@ -5,10 +5,12 @@ import sys
 from PySide6.QtWidgets import QApplication
 
 from .ui.main_window import MainWindow
+from .ui.style import apply_app_style
 
 
 def main() -> int:
     app = QApplication(sys.argv)
+    apply_app_style(app)
     win = MainWindow()
     win.show()
     return app.exec()
@@ -16,4 +18,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

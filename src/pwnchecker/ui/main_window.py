@@ -96,17 +96,33 @@ class MainWindow(QMainWindow):
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(14, 14, 14, 10)
+        root_layout.setSpacing(10)
 
         header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(10)
+
+        title_block = QVBoxLayout()
+        title_block.setContentsMargins(0, 0, 0, 0)
+        title_block.setSpacing(2)
+
         title = QLabel("PwnChecker")
+        title.setObjectName("app_title")
         title.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        title.setStyleSheet("font-size: 18px; font-weight: 600;")
+
+        subtitle = QLabel("Local-first breach checks | encrypted vault")
+        subtitle.setObjectName("app_subtitle")
+        subtitle.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        title_block.addWidget(title)
+        title_block.addWidget(subtitle)
 
         self.check_now_btn = QPushButton("Check Now")
         self.check_now_btn.setObjectName("check_now_btn")
         self.check_now_btn.clicked.connect(self._on_check_now)
 
-        header.addWidget(title)
+        header.addLayout(title_block)
         header.addStretch(1)
         header.addWidget(self.check_now_btn)
 
@@ -125,6 +141,7 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.tabs)
 
         self.setCentralWidget(root)
+        self.statusBar().showMessage("Ready")
 
         if self._repo is None:
             if not self._ensure_vault_unlocked():
@@ -142,8 +159,12 @@ class MainWindow(QMainWindow):
     def _build_accounts_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(8)
         self.filter_edit = QLineEdit()
         self.filter_edit.setObjectName("accounts_filter")
         self.filter_edit.setPlaceholderText("Filter accounts...")
@@ -151,15 +172,18 @@ class MainWindow(QMainWindow):
 
         self.add_btn = QPushButton("Add")
         self.add_btn.setObjectName("add_account_btn")
+        self.add_btn.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_FileDialogNewFolder))
         self.add_btn.clicked.connect(self._on_add_account)
 
         self.edit_btn = QPushButton("Edit")
         self.edit_btn.setObjectName("edit_account_btn")
+        self.edit_btn.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_FileDialogDetailedView))
         self.edit_btn.setEnabled(False)
         self.edit_btn.clicked.connect(self._on_edit_account)
 
         self.delete_btn = QPushButton("Delete")
         self.delete_btn.setObjectName("delete_account_btn")
+        self.delete_btn.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_TrashIcon))
         self.delete_btn.setEnabled(False)
         self.delete_btn.clicked.connect(self._on_delete_account)
 
@@ -175,9 +199,11 @@ class MainWindow(QMainWindow):
         self.accounts_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.accounts_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.accounts_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.accounts_table.setAlternatingRowColors(True)
+        self.accounts_table.verticalHeader().setVisible(False)
         self.accounts_table.itemSelectionChanged.connect(self._on_accounts_selection_changed)
 
-        hint = QLabel("Account storage UI is placeholder in Phase 0.1 (in-memory only).")
+        hint = QLabel("Encrypted account storage is enabled.")
         hint.setStyleSheet("color: #555;")
 
         layout.addWidget(hint)
@@ -188,11 +214,13 @@ class MainWindow(QMainWindow):
     def _build_reports_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
         self.runs_list = QListWidget()
         self.runs_list.setObjectName("runs_list")
 
-        hint = QLabel("Run history is placeholder in Phase 0.1.")
+        hint = QLabel("Run history is stored locally (checks are stubbed).")
         hint.setStyleSheet("color: #555;")
 
         layout.addWidget(hint)
@@ -202,6 +230,8 @@ class MainWindow(QMainWindow):
     def _build_settings_tab(self) -> QWidget:
         w = QWidget()
         layout = QVBoxLayout(w)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
         hint = QLabel("Settings UI is placeholder in Phase 0.1.")
         hint.setStyleSheet("color: #555;")
         layout.addWidget(hint)
@@ -300,6 +330,7 @@ class MainWindow(QMainWindow):
         self._repo.add_account(account.service, "email", account.identifier)
         self._accounts = self._repo.list_accounts()
         self._refresh_accounts_table()
+        self.statusBar().showMessage("Account added", 2500)
 
     def edit_account(self, index: int, account: AccountRow) -> None:
         if self._repo is None:
@@ -308,6 +339,7 @@ class MainWindow(QMainWindow):
         self._repo.update_account(acct_id, account.service, "email", account.identifier)
         self._accounts = self._repo.list_accounts()
         self._refresh_accounts_table()
+        self.statusBar().showMessage("Account updated", 2500)
 
     def delete_account(self, index: int) -> None:
         if self._repo is None:
@@ -316,6 +348,7 @@ class MainWindow(QMainWindow):
         self._repo.delete_account(acct_id)
         self._accounts = self._repo.list_accounts()
         self._refresh_accounts_table()
+        self.statusBar().showMessage("Account deleted", 2500)
 
     def _ensure_vault_unlocked(self) -> bool:
         db_path = vault_db_path()
@@ -340,6 +373,7 @@ class MainWindow(QMainWindow):
 
     def _on_check_now(self) -> None:
         # Phase 0.1 stub: create a new run record and show it in Reports.
+        self.statusBar().showMessage("Running checks (stub)...", 2500)
         run = RunSummary(
             created_at_utc=datetime.now(UTC),
             accounts_checked=len(self._accounts),
