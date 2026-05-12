@@ -27,12 +27,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..providers.domain_posture import assess_domain
 from ..providers.pwned_passwords import PwnedPasswordsClient
 from ..storage.accounts import Account, AccountRepo
 from ..storage.hash_cache import HashCacheRepo
 from ..storage.paths import vault_db_path
 from ..storage.results import ResultRepo
 from ..storage.runs import RunRepo
+from ..storage.settings import SettingsRepo
 from ..storage.vault import VaultLockedError, VaultSession, create_vault, open_vault, vault_exists
 from .password_dialog import PasswordDialog
 from .vault_dialog import VaultDialog
@@ -106,11 +108,13 @@ class MainWindow(QMainWindow):
         self._run_repo: RunRepo | None = RunRepo(session) if session else None
         self._result_repo: ResultRepo | None = ResultRepo(session) if session else None
         self._cache_repo: HashCacheRepo | None = HashCacheRepo(session) if session else None
+        self._settings_repo: SettingsRepo | None = SettingsRepo(session) if session else None
 
         # UI selection state for batch actions.
         self._checked_account_ids: set[int] = set()
         self._checked_run_ids: set[int] = set()
         self._run_serial_by_id: dict[int, int] = {}
+        self._settings_baseline: dict[str, str] = {}
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
@@ -170,6 +174,7 @@ class MainWindow(QMainWindow):
         else:
             self._accounts = self._repo.list_accounts()
 
+        self._load_settings_into_ui()
         self._refresh_accounts_table()
         self._refresh_runs()
         self._refresh_results()
@@ -281,8 +286,91 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(w)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
+
+        self.unsaved_label = QLabel("Unsaved changes")
+        self.unsaved_label.setObjectName("unsaved_label")
+        self.unsaved_label.setStyleSheet("color: #79ffe1; font-weight: 700;")
+        self.unsaved_label.hide()
+
+        self.redact_chk = QPushButton("Report Redaction: ON")
+        self.redact_chk.setObjectName("redact_toggle")
+        self.redact_chk.setCheckable(True)
+        self.redact_chk.clicked.connect(self._on_settings_changed)
+
+        self.remember_pw_chk = QPushButton("Remember Password Hashes: ON")
+        self.remember_pw_chk.setObjectName("remember_pw_toggle")
+        self.remember_pw_chk.setCheckable(True)
+        self.remember_pw_chk.clicked.connect(self._on_settings_changed)
+
+        self.save_settings_btn = QPushButton("Save Settings")
+        self.save_settings_btn.setObjectName("save_settings_btn")
+        self.save_settings_btn.clicked.connect(self._on_save_settings)
+
+        layout.addWidget(self.redact_chk)
+        layout.addWidget(self.remember_pw_chk)
+        layout.addWidget(self.save_settings_btn)
+        layout.addWidget(self.unsaved_label)
         layout.addStretch(1)
         return w
+
+    def _sync_settings_labels(self) -> None:
+        self.redact_chk.setText(
+            "Report Redaction: ON" if self.redact_chk.isChecked() else "Report Redaction: OFF"
+        )
+        self.remember_pw_chk.setText(
+            "Remember Password Hashes: ON"
+            if self.remember_pw_chk.isChecked()
+            else "Remember Password Hashes: OFF"
+        )
+
+    def _on_settings_changed(self) -> None:
+        self._sync_settings_labels()
+        self._update_unsaved_indicator()
+
+    def _load_settings_into_ui(self) -> None:
+        if self._settings_repo is None:
+            return
+        redact = (self._settings_repo.get("report_redact") or "1").strip() != "0"
+        remember = (self._settings_repo.get("remember_pw_hash") or "1").strip() != "0"
+        self._settings_baseline = {
+            "report_redact": "1" if redact else "0",
+            "remember_pw_hash": "1" if remember else "0",
+        }
+        self.redact_chk.blockSignals(True)
+        self.remember_pw_chk.blockSignals(True)
+        try:
+            self.redact_chk.setChecked(redact)
+            self.remember_pw_chk.setChecked(remember)
+            self._sync_settings_labels()
+            self._update_unsaved_indicator()
+        finally:
+            self.redact_chk.blockSignals(False)
+            self.remember_pw_chk.blockSignals(False)
+
+    def _update_unsaved_indicator(self) -> None:
+        current = {
+            "report_redact": "1" if self.redact_chk.isChecked() else "0",
+            "remember_pw_hash": "1" if self.remember_pw_chk.isChecked() else "0",
+        }
+        dirty = bool(self._settings_baseline) and current != self._settings_baseline
+        self.unsaved_label.setVisible(dirty)
+
+    def _on_save_settings(self) -> None:
+        if self._settings_repo is None:
+            return
+        self._settings_repo.set("report_redact", "1" if self.redact_chk.isChecked() else "0")
+        self._settings_repo.set(
+            "remember_pw_hash",
+            "1" if self.remember_pw_chk.isChecked() else "0",
+        )
+        self._settings_baseline = {
+            "report_redact": "1" if self.redact_chk.isChecked() else "0",
+            "remember_pw_hash": "1" if self.remember_pw_chk.isChecked() else "0",
+        }
+        self._update_unsaved_indicator()
+        # Apply immediately to the currently displayed report view.
+        self._refresh_results()
+        self.statusBar().showMessage("Settings saved", 2500)
 
     def _refresh_accounts_table(self) -> None:
         flt = (self.filter_edit.text() if hasattr(self, "filter_edit") else "").strip().lower()
@@ -393,6 +481,8 @@ class MainWindow(QMainWindow):
             acct = acct_by_id.get(acct_id)
             service = acct.service if acct else f"account:{acct_id}"
             ident = acct.identifier_value if acct else ""
+            if self._is_redaction_enabled():
+                ident = self._redact_identifier(ident)
             lines.append(f"{service}  |  {ident}")
             for rr in by_account[acct_id]:
                 lines.append(f"  - {self._format_result_line(rr.provider, rr.status, rr.data)}")
@@ -420,7 +510,32 @@ class MainWindow(QMainWindow):
                     return "Password not found in breach corpus"
                 return f"Password found in breach corpus ({count} times)"
 
+        if provider == "domain-posture":
+            msg = str(data.get("message", "")).strip()
+            if msg:
+                return msg
+            return "Unknown: domain configuration could not be verified"
+
         return f"{provider}: {status}"
+
+    def _is_redaction_enabled(self) -> bool:
+        if self._settings_repo is None:
+            return True
+        return (self._settings_repo.get("report_redact") or "1").strip() != "0"
+
+    @staticmethod
+    def _redact_identifier(s: str) -> str:
+        s = (s or "").strip()
+        if not s:
+            return ""
+        if "@" in s:
+            left, right = s.split("@", 1)
+            left_r = (left[:1] + "***") if left else "***"
+            right_r = (right[:1] + "***") if right else "***"
+            return f"{left_r}@{right_r}"
+        if len(s) <= 2:
+            return "*" * len(s)
+        return s[:2] + "***"
 
     def _sync_run_actions(self) -> None:
         has_any = bool(self._checked_run_ids)
@@ -589,7 +704,11 @@ class MainWindow(QMainWindow):
             return
         acct_id = self._repo.add_account(account.service, "email", account.identifier)
         self._accounts = self._repo.list_accounts()
-        if password and self._cache_repo is not None:
+        if (
+            password
+            and self._cache_repo is not None
+            and self._is_remember_password_hash_enabled()
+        ):
             digest = sha1(password.encode("utf-8")).hexdigest().upper()
             self._cache_repo.upsert(
                 acct_id,
@@ -599,6 +718,11 @@ class MainWindow(QMainWindow):
             )
         self._refresh_accounts_table()
         self.statusBar().showMessage("Account added", 2500)
+
+    def _is_remember_password_hash_enabled(self) -> bool:
+        if self._settings_repo is None:
+            return True
+        return (self._settings_repo.get("remember_pw_hash") or "1").strip() != "0"
 
     def edit_account(self, index: int, account: AccountRow) -> None:
         if self._repo is None:
@@ -648,6 +772,8 @@ class MainWindow(QMainWindow):
         self._run_repo = RunRepo(self._session)
         self._result_repo = ResultRepo(self._session)
         self._cache_repo = HashCacheRepo(self._session)
+        self._settings_repo = SettingsRepo(self._session)
+        self._load_settings_into_ui()
         return True
 
     def _on_check_now(self) -> None:
@@ -678,7 +804,7 @@ class MainWindow(QMainWindow):
 
             cached = self._cache_repo.get(acct.id, "pwned-passwords-sha1", 1)
             sha1_hex: str | None = None
-            if cached is not None:
+            if cached is not None and self._is_remember_password_hash_enabled():
                 sha1_hex = str(cached.data.get("sha1") or "").strip()
 
             if not sha1_hex:
@@ -696,12 +822,13 @@ class MainWindow(QMainWindow):
                     )
                     continue
                 sha1_hex = sha1(dlg.get_password().encode("utf-8")).hexdigest().upper()
-                self._cache_repo.upsert(
-                    acct.id,
-                    "pwned-passwords-sha1",
-                    1,
-                    {"sha1": sha1_hex, "prefix5": sha1_hex[:5], "algo": "sha1"},
-                )
+                if self._is_remember_password_hash_enabled():
+                    self._cache_repo.upsert(
+                        acct.id,
+                        "pwned-passwords-sha1",
+                        1,
+                        {"sha1": sha1_hex, "prefix5": sha1_hex[:5], "algo": "sha1"},
+                    )
 
             try:
                 res = pp.check_sha1(sha1_hex)
@@ -720,6 +847,19 @@ class MainWindow(QMainWindow):
                     status="error",
                     data={"error": type(e).__name__},
                 )
+
+            # No-key domain posture check (email domain security posture).
+            dom = ""
+            if "@" in acct.identifier_value:
+                dom = acct.identifier_value.split("@", 1)[1].strip().lower()
+            dp = assess_domain(dom)
+            self._result_repo.add_result(
+                run_id=run_id,
+                account_id=acct.id,
+                provider="domain-posture",
+                status=dp.status,
+                data={"domain": dp.domain, "message": dp.message},
+            )
 
         self._refresh_runs()
         self._refresh_results()

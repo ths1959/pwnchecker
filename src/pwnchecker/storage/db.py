@@ -54,6 +54,13 @@ CREATE TABLE IF NOT EXISTS hash_cache (
   updated_at_utc TEXT NOT NULL,
   UNIQUE(account_id, provider, algo_version)
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value_nonce BLOB NOT NULL,
+  value_cipher BLOB NOT NULL,
+  updated_at_utc TEXT NOT NULL
+);
 """
 
 
@@ -68,4 +75,3 @@ def connect(db_path: Path) -> sqlite3.Connection:
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
     conn.commit()
-
