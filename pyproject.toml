@@ -8,6 +8,7 @@ license = { text = "MIT" }
 authors = [{ name = "ths1959" }]
 dependencies = [
   "typer>=0.12",
+  "PySide6>=6.7",
 ]
 
 [project.scripts]
@@ -16,6 +17,7 @@ pwnchecker = "pwnchecker.cli:app"
 [project.optional-dependencies]
 dev = [
   "pytest>=8.0",
+  "pytest-qt>=4.4",
   "ruff>=0.5",
 ]
 
@@ -29,4 +31,3 @@ select = ["E", "F", "I", "B", "UP"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-
