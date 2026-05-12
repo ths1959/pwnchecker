@@ -23,6 +23,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..storage.accounts import Account, AccountRepo
+from ..storage.paths import vault_db_path
+from ..storage.vault import VaultLockedError, VaultSession, create_vault, open_vault, vault_exists
+from .vault_dialog import VaultDialog
+
 
 @dataclass(frozen=True)
 class AccountRow:
@@ -79,14 +84,14 @@ class AccountDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, *, session: VaultSession | None = None) -> None:
         super().__init__()
         self.setWindowTitle("PwnChecker")
         self.setMinimumSize(900, 600)
 
-        self._accounts: list[AccountRow] = [
-            AccountRow(service="Example", identifier="user@example.com"),
-        ]
+        self._session: VaultSession | None = session
+        self._repo: AccountRepo | None = AccountRepo(session) if session else None
+        self._accounts: list[Account] = []
         self._runs: list[RunSummary] = []
 
         root = QWidget()
@@ -120,6 +125,16 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.tabs)
 
         self.setCentralWidget(root)
+
+        if self._repo is None:
+            if not self._ensure_vault_unlocked():
+                # User cancelled unlock/create; keep the window usable but empty.
+                self.check_now_btn.setEnabled(False)
+                self.add_btn.setEnabled(False)
+                self.edit_btn.setEnabled(False)
+                self.delete_btn.setEnabled(False)
+        else:
+            self._accounts = self._repo.list_accounts()
 
         self._refresh_accounts_table()
         self._refresh_reports()
@@ -200,13 +215,13 @@ class MainWindow(QMainWindow):
             rows = [
                 a
                 for a in self._accounts
-                if flt in a.service.lower() or flt in a.identifier.lower()
+                if flt in a.service.lower() or flt in a.identifier_value.lower()
             ]
 
         self.accounts_table.setRowCount(len(rows))
         for i, acct in enumerate(rows):
             self.accounts_table.setItem(i, 0, QTableWidgetItem(acct.service))
-            self.accounts_table.setItem(i, 1, QTableWidgetItem(acct.identifier))
+            self.accounts_table.setItem(i, 1, QTableWidgetItem(acct.identifier_value))
         self.accounts_table.resizeColumnsToContents()
         self._on_accounts_selection_changed()
 
@@ -236,7 +251,7 @@ class MainWindow(QMainWindow):
         filtered = [
             (idx, a)
             for idx, a in enumerate(self._accounts)
-            if flt in a.service.lower() or flt in a.identifier.lower()
+            if flt in a.service.lower() or flt in a.identifier_value.lower()
         ]
         if row < 0 or row >= len(filtered):
             return None
@@ -246,17 +261,23 @@ class MainWindow(QMainWindow):
         dlg = AccountDialog(self, title="Add Account")
         if dlg.exec() != QDialog.Accepted:
             return
-        self.add_account(dlg.get_value())
+        row = dlg.get_value()
+        self.add_account(AccountRow(service=row.service, identifier=row.identifier))
 
     def _on_edit_account(self) -> None:
         idx = self._selected_account_index()
         if idx is None:
             return
         current = self._accounts[idx]
-        dlg = AccountDialog(self, title="Edit Account", initial=current)
+        dlg = AccountDialog(
+            self,
+            title="Edit Account",
+            initial=AccountRow(service=current.service, identifier=current.identifier_value),
+        )
         if dlg.exec() != QDialog.Accepted:
             return
-        self.edit_account(idx, dlg.get_value())
+        row = dlg.get_value()
+        self.edit_account(idx, AccountRow(service=row.service, identifier=row.identifier))
 
     def _on_delete_account(self) -> None:
         idx = self._selected_account_index()
@@ -274,16 +295,48 @@ class MainWindow(QMainWindow):
         self.delete_account(idx)
 
     def add_account(self, account: AccountRow) -> None:
-        self._accounts.append(account)
+        if self._repo is None:
+            return
+        self._repo.add_account(account.service, "email", account.identifier)
+        self._accounts = self._repo.list_accounts()
         self._refresh_accounts_table()
 
     def edit_account(self, index: int, account: AccountRow) -> None:
-        self._accounts[index] = account
+        if self._repo is None:
+            return
+        acct_id = self._accounts[index].id
+        self._repo.update_account(acct_id, account.service, "email", account.identifier)
+        self._accounts = self._repo.list_accounts()
         self._refresh_accounts_table()
 
     def delete_account(self, index: int) -> None:
-        del self._accounts[index]
+        if self._repo is None:
+            return
+        acct_id = self._accounts[index].id
+        self._repo.delete_account(acct_id)
+        self._accounts = self._repo.list_accounts()
         self._refresh_accounts_table()
+
+    def _ensure_vault_unlocked(self) -> bool:
+        db_path = vault_db_path()
+        if vault_exists(db_path):
+            dlg = VaultDialog(self, mode="unlock")
+            if dlg.exec() != QDialog.Accepted:
+                return False
+            try:
+                self._session = open_vault(db_path, dlg.get_password())
+            except VaultLockedError:
+                QMessageBox.warning(self, "Unlock Failed", "Invalid master password.")
+                return self._ensure_vault_unlocked()
+        else:
+            dlg = VaultDialog(self, mode="create")
+            if dlg.exec() != QDialog.Accepted:
+                return False
+            self._session = create_vault(db_path, dlg.get_password())
+
+        self._repo = AccountRepo(self._session)
+        self._accounts = self._repo.list_accounts()
+        return True
 
     def _on_check_now(self) -> None:
         # Phase 0.1 stub: create a new run record and show it in Reports.

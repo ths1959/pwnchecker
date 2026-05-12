@@ -147,6 +147,7 @@ htmlcov/
 *.sqlite3
 *.db
 *.log
+.localdata/
 
 # TernJS port file
 .tern-port
