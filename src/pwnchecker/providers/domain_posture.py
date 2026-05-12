@@ -19,7 +19,7 @@ def assess_domain(domain: str) -> DomainPosture:
         return DomainPosture(
             domain=d,
             status="unknown",
-            message="Unknown: invalid domain",
+            message="Recommended actions: verify domain spelling and DNS configuration",
             details={},
         )
 
@@ -29,7 +29,7 @@ def assess_domain(domain: str) -> DomainPosture:
         return DomainPosture(
             domain=d,
             status="unknown",
-            message="Unknown: domain configuration could not be verified (DNS error)",
+            message="Recommended actions: retry later; DNS lookup failed",
             details={},
         )
 
@@ -63,7 +63,7 @@ def assess_domain(domain: str) -> DomainPosture:
         return DomainPosture(
             domain=d,
             status="unknown",
-            message="Unknown: no MX records found",
+            message="Recommended actions: verify domain can receive email (MX records)",
             details=details,
         )
 
@@ -71,7 +71,7 @@ def assess_domain(domain: str) -> DomainPosture:
         return DomainPosture(
             domain=d,
             status="attention",
-            message="Needs attention: DMARC missing; spoofing risk is higher",
+            message="Recommended actions: add DMARC policy (p=quarantine/reject) to reduce spoofing risk",
             details=details,
         )
 
@@ -80,28 +80,28 @@ def assess_domain(domain: str) -> DomainPosture:
         return DomainPosture(
             domain=d,
             status="secure",
-            message="Secure: strong anti-spoofing (DMARC reject)",
+            message="Recommended actions: maintain DMARC reject and review SPF alignment periodically",
             details=details,
         )
     if policy == "quarantine":
         return DomainPosture(
             domain=d,
             status="good",
-            message="Good: anti-spoofing enabled (DMARC quarantine)",
+            message="Recommended actions: consider tightening DMARC to p=reject after monitoring",
             details=details,
         )
     if policy == "none":
         return DomainPosture(
             domain=d,
             status="good",
-            message="Good: DMARC enabled (monitoring-only)",
+            message="Recommended actions: move from monitoring-only (p=none) to quarantine/reject when ready",
             details=details,
         )
 
     return DomainPosture(
         domain=d,
         status="unknown",
-        message="Unknown: domain configuration could not be verified",
+        message="Recommended actions: verify SPF/DMARC records and retry later",
         details=details,
     )
 
