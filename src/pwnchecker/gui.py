@@ -12,6 +12,8 @@ def main() -> int:
     app = QApplication(sys.argv)
     apply_app_style(app)
     win = MainWindow()
+    if not win.is_ready():
+        return 0
     win.show()
     return app.exec()
 

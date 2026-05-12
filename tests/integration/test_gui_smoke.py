@@ -34,7 +34,7 @@ def test_accounts_add_edit_delete_non_ui_helpers(qtbot, monkeypatch, tmp_path) -
     assert win.accounts_table.rowCount() == initial_rows + 1
 
     win.edit_account(0, AccountRow(service="Example2", identifier="user2@example.com"))
-    assert win.accounts_table.item(0, 0).text() == "Example2"
+    assert win.accounts_table.item(0, 1).text() == "Example2"
 
     win.delete_account(0)
     assert win.accounts_table.rowCount() == initial_rows

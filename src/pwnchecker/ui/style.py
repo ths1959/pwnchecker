@@ -112,6 +112,23 @@ def apply_app_style(app: QApplication) -> None:
           selection-color: #79ffe1;
         }
 
+        QTableWidget::item {
+          background: #0b1220;
+        }
+
+        QTableWidget::item:alternate {
+          background: #0a1020;
+        }
+
+        QTableWidget::item:selected {
+          background: #0d2a2c;
+          color: #79ffe1;
+        }
+
+        QTableWidget::item:focus {
+          outline: none;
+        }
+
         QHeaderView::section {
           background: #070f1e;
           border: 0px;

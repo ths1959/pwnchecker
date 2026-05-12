@@ -18,6 +18,8 @@ class Account:
     service: str
     identifier_type: str
     identifier_value: str
+    created_at_utc: str
+    updated_at_utc: str
 
 
 class AccountRepo:
@@ -27,7 +29,14 @@ class AccountRepo:
     def list_accounts(self) -> list[Account]:
         cur = self._s.conn.execute(
             """
-            SELECT id, service, identifier_type, identifier_nonce, identifier_cipher
+            SELECT
+              id,
+              service,
+              identifier_type,
+              identifier_nonce,
+              identifier_cipher,
+              created_at_utc,
+              updated_at_utc
             FROM accounts
             ORDER BY service, id
             """
@@ -46,6 +55,8 @@ class AccountRepo:
                     service=str(row["service"]),
                     identifier_type=str(row["identifier_type"]),
                     identifier_value=ident.decode("utf-8"),
+                    created_at_utc=str(row["created_at_utc"]),
+                    updated_at_utc=str(row["updated_at_utc"]),
                 )
             )
         return out
