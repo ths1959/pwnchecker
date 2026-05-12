@@ -29,7 +29,21 @@ class RunRepo:
             out.append(Run(id=int(r["id"]), created_at_utc=str(r["created_at_utc"])))
         return out
 
+    def list_runs_asc(self) -> list[Run]:
+        cur = self._s.conn.execute("SELECT id, created_at_utc FROM runs ORDER BY id ASC")
+        out: list[Run] = []
+        for r in cur.fetchall():
+            out.append(Run(id=int(r["id"]), created_at_utc=str(r["created_at_utc"])))
+        return out
+
     def delete_run(self, run_id: int) -> None:
         # Results are deleted via ON DELETE CASCADE.
         self._s.conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        self._s.conn.commit()
+
+    def delete_runs(self, run_ids: list[int]) -> None:
+        if not run_ids:
+            return
+        placeholders = ",".join("?" for _ in run_ids)
+        self._s.conn.execute(f"DELETE FROM runs WHERE id IN ({placeholders})", run_ids)
         self._s.conn.commit()

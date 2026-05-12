@@ -15,22 +15,26 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from ..providers.pwned_passwords import PwnedPasswordsClient
 from ..storage.accounts import Account, AccountRepo
 from ..storage.hash_cache import HashCacheRepo
 from ..storage.paths import vault_db_path
 from ..storage.results import ResultRepo
 from ..storage.runs import RunRepo
 from ..storage.vault import VaultLockedError, VaultSession, create_vault, open_vault, vault_exists
+from .password_dialog import PasswordDialog
 from .vault_dialog import VaultDialog
 
 
@@ -50,6 +54,9 @@ class AccountDialog(QDialog):
         self.service_edit.setObjectName("service_edit")
         self.identifier_edit = QLineEdit()
         self.identifier_edit.setObjectName("identifier_edit")
+        self.password_edit = QLineEdit()
+        self.password_edit.setObjectName("account_password")
+        self.password_edit.setEchoMode(QLineEdit.Password)
 
         if initial is not None:
             self.service_edit.setText(initial.service)
@@ -58,6 +65,7 @@ class AccountDialog(QDialog):
         form = QFormLayout()
         form.addRow("Service", self.service_edit)
         form.addRow("Email/Username", self.identifier_edit)
+        form.addRow("Password (optional)", self.password_edit)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._on_accept)
@@ -81,6 +89,9 @@ class AccountDialog(QDialog):
             identifier=self.identifier_edit.text().strip(),
         )
 
+    def get_password_optional(self) -> str:
+        return self.password_edit.text()
+
 
 class MainWindow(QMainWindow):
     def __init__(self, *, session: VaultSession | None = None) -> None:
@@ -95,6 +106,11 @@ class MainWindow(QMainWindow):
         self._run_repo: RunRepo | None = RunRepo(session) if session else None
         self._result_repo: ResultRepo | None = ResultRepo(session) if session else None
         self._cache_repo: HashCacheRepo | None = HashCacheRepo(session) if session else None
+
+        # UI selection state for batch actions.
+        self._checked_account_ids: set[int] = set()
+        self._checked_run_ids: set[int] = set()
+        self._run_serial_by_id: dict[int, int] = {}
 
         root = QWidget()
         root_layout = QVBoxLayout(root)
@@ -199,17 +215,17 @@ class MainWindow(QMainWindow):
 
         self.accounts_table = QTableWidget()
         self.accounts_table.setObjectName("accounts_table")
-        self.accounts_table.setColumnCount(5)
+        self.accounts_table.setColumnCount(6)
         self.accounts_table.setHorizontalHeaderLabels(
-            ["No.", "Service", "Identifier", "Created", "Last Updated"]
+            ["", "No.", "Service", "Identifier", "Created", "Last Updated"]
         )
         self.accounts_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.accounts_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.accounts_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.accounts_table.setAlternatingRowColors(True)
         self.accounts_table.verticalHeader().setVisible(False)
-        self.accounts_table.cellClicked.connect(self._select_single_account_row)
         self.accounts_table.itemSelectionChanged.connect(self._on_accounts_selection_changed)
+        self.accounts_table.cellClicked.connect(self._on_account_cell_clicked)
         layout.addLayout(controls)
         layout.addWidget(self.accounts_table)
         return w
@@ -238,25 +254,23 @@ class MainWindow(QMainWindow):
         self.runs_list.setMinimumWidth(280)
         self.runs_list.setSelectionMode(QAbstractItemView.SingleSelection)
         self.runs_list.currentRowChanged.connect(self._on_run_selection_changed)
+        self.runs_list.itemChanged.connect(self._on_run_item_changed)
 
         self.results_table = QTableWidget()
-        self.results_table.setObjectName("results_table")
-        self.results_table.setColumnCount(4)
-        self.results_table.setHorizontalHeaderLabels(
-            ["Service", "Identifier", "Provider", "Status"]
-        )
-        self.results_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.results_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.results_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.results_table.setAlternatingRowColors(True)
-        self.results_table.verticalHeader().setVisible(False)
-        self.results_table.cellClicked.connect(self._select_single_result_row)
+        # Replaced by a textual report view for clarity.
+        self.results_table.setObjectName("results_table_deprecated")
+        self.results_table.hide()
+
+        self.report_text = QTextEdit()
+        self.report_text.setObjectName("report_text")
+        self.report_text.setReadOnly(True)
+        self.report_text.setLineWrapMode(QTextEdit.NoWrap)
 
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(10)
         row.addWidget(self.runs_list, 0)
-        row.addWidget(self.results_table, 1)
+        row.addWidget(self.report_text, 1)
 
         layout.addLayout(actions)
         layout.addLayout(row)
@@ -282,14 +296,18 @@ class MainWindow(QMainWindow):
 
         self.accounts_table.setRowCount(len(rows))
         for i, acct in enumerate(rows):
+            cb = QTableWidgetItem("")
+            cb.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable | Qt.ItemIsSelectable)
+            cb.setCheckState(Qt.Checked if acct.id in self._checked_account_ids else Qt.Unchecked)
+            self.accounts_table.setItem(i, 0, cb)
             # Serial number for display only (stable within the current sorted/filtered view).
-            self.accounts_table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
-            self.accounts_table.setItem(i, 1, QTableWidgetItem(acct.service))
-            self.accounts_table.setItem(i, 2, QTableWidgetItem(acct.identifier_value))
-            self.accounts_table.setItem(i, 3, QTableWidgetItem(self._fmt_gmt8(acct.created_at_utc)))
+            self.accounts_table.setItem(i, 1, QTableWidgetItem(str(i + 1)))
+            self.accounts_table.setItem(i, 2, QTableWidgetItem(acct.service))
+            self.accounts_table.setItem(i, 3, QTableWidgetItem(acct.identifier_value))
+            self.accounts_table.setItem(i, 4, QTableWidgetItem(self._fmt_gmt8(acct.created_at_utc)))
             self.accounts_table.setItem(
                 i,
-                4,
+                5,
                 QTableWidgetItem(self._fmt_gmt8(acct.updated_at_utc)),
             )
         self.accounts_table.resizeColumnsToContents()
@@ -323,9 +341,21 @@ class MainWindow(QMainWindow):
         self.runs_list.clear()
         if self._run_repo is None:
             return
+        asc = self._run_repo.list_runs_asc()
+        self._run_serial_by_id = {r.id: i + 1 for i, r in enumerate(asc)}
+
         runs = self._run_repo.list_runs()
-        for r in runs:
-            self.runs_list.addItem(f"{self._fmt_gmt8(r.created_at_utc)}  |  run #{r.id}")
+        self.runs_list.blockSignals(True)
+        try:
+            for r in runs:
+                serial = self._run_serial_by_id.get(r.id, 0)
+                item = QListWidgetItem(f"Run {serial}  |  {self._fmt_gmt8(r.created_at_utc)}")
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Checked if r.id in self._checked_run_ids else Qt.Unchecked)
+                item.setData(Qt.ItemDataRole.UserRole, r.id)
+                self.runs_list.addItem(item)
+        finally:
+            self.runs_list.blockSignals(False)
         if runs:
             self.runs_list.setCurrentRow(0)
         self._sync_run_actions()
@@ -342,65 +372,142 @@ class MainWindow(QMainWindow):
         return runs[row].id
 
     def _refresh_results(self) -> None:
-        self.results_table.setRowCount(0)
+        self.report_text.setPlainText("")
         run_id = self._selected_run_id()
         if run_id is None or self._result_repo is None:
             return
         results = self._result_repo.list_results_for_run(run_id)
 
         acct_by_id = {a.id: a for a in self._accounts}
-        self.results_table.setRowCount(len(results))
-        for i, r in enumerate(results):
-            acct = acct_by_id.get(r.account_id)
-            service = acct.service if acct else f"account:{r.account_id}"
+        runs = self._run_repo.list_runs() if self._run_repo is not None else []
+        run_ts = next((r.created_at_utc for r in runs if r.id == run_id), "")
+        serial = self._run_serial_by_id.get(run_id, 0)
+        header = f"Run {serial}  |  {self._fmt_gmt8(run_ts)}"
+
+        by_account: dict[int, list[Any]] = {}
+        for r in results:
+            by_account.setdefault(r.account_id, []).append(r)
+
+        lines: list[str] = [header, ""]
+        for acct_id in sorted(by_account.keys()):
+            acct = acct_by_id.get(acct_id)
+            service = acct.service if acct else f"account:{acct_id}"
             ident = acct.identifier_value if acct else ""
-            self.results_table.setItem(i, 0, QTableWidgetItem(service))
-            self.results_table.setItem(i, 1, QTableWidgetItem(ident))
-            self.results_table.setItem(i, 2, QTableWidgetItem(r.provider))
-            self.results_table.setItem(i, 3, QTableWidgetItem(r.status))
-        self.results_table.resizeColumnsToContents()
+            lines.append(f"{service}  |  {ident}")
+            for rr in by_account[acct_id]:
+                lines.append(f"  - {self._format_result_line(rr.provider, rr.status, rr.data)}")
+            lines.append("")
+
+        self.report_text.setPlainText("\n".join(lines).rstrip())
+
+    @staticmethod
+    def _format_result_line(provider: str, status: str, data: dict[str, Any]) -> str:
+        if provider == "pwnchecker":
+            return "Account record processed"
+
+        if provider == "pwned-passwords":
+            if status == "skipped":
+                return "Password exposure check skipped"
+            if status == "error":
+                err = str(data.get("error", "Error"))
+                return f"Password exposure check failed ({err})"
+            if status == "ok":
+                try:
+                    count = int(data.get("count", 0))
+                except Exception:
+                    count = 0
+                if count <= 0:
+                    return "Password not found in breach corpus"
+                return f"Password found in breach corpus ({count} times)"
+
+        return f"{provider}: {status}"
 
     def _sync_run_actions(self) -> None:
-        has_run = self._selected_run_id() is not None
-        self.delete_run_btn.setEnabled(has_run)
+        has_any = bool(self._checked_run_ids)
+        self.delete_run_btn.setEnabled(has_any)
 
     def _on_run_selection_changed(self, _row: int) -> None:
         self._sync_run_actions()
         self._refresh_results()
 
+    def _on_run_item_changed(self, item: QListWidgetItem) -> None:
+        run_id = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(run_id, int):
+            return
+        if item.checkState() == Qt.Checked:
+            self._checked_run_ids.add(run_id)
+        else:
+            self._checked_run_ids.discard(run_id)
+        self._sync_run_actions()
+
+    def _selected_run_ids(self) -> list[int]:
+        # Preserve old name for minimal churn: now driven by checked boxes.
+        return sorted(self._checked_run_ids)
+
     def _on_delete_run(self) -> None:
-        run_id = self._selected_run_id()
-        if run_id is None or self._run_repo is None:
+        run_ids = sorted(self._checked_run_ids)
+        if not run_ids or self._run_repo is None:
             return
 
+        if len(run_ids) == 1:
+            serial = self._run_serial_by_id.get(run_ids[0], 0)
+            prompt = f"Delete run {serial} and associated results?"
+        else:
+            prompt = f"Delete {len(run_ids)} run(s) and associated results?"
         res = QMessageBox.question(
             self,
             "Delete Run",
-            f"Delete run #{run_id} and associated results?",
+            prompt,
             QMessageBox.Yes | QMessageBox.No,
         )
         if res != QMessageBox.Yes:
             return
 
-        self._run_repo.delete_run(run_id)
+        if len(run_ids) == 1:
+            self._run_repo.delete_run(run_ids[0])
+        else:
+            self._run_repo.delete_runs(run_ids)
+        self._checked_run_ids.clear()
         self._refresh_runs()
         self._refresh_results()
-        self.statusBar().showMessage(f"Run #{run_id} deleted", 2500)
+        self.statusBar().showMessage("Run(s) deleted", 2500)
 
     def _on_accounts_selection_changed(self) -> None:
         sel_model = self.accounts_table.selectionModel()
         has_sel = bool(sel_model and sel_model.hasSelection())
         self.edit_btn.setEnabled(has_sel)
-        self.delete_btn.setEnabled(has_sel)
+        self.delete_btn.setEnabled(bool(self._checked_account_ids))
 
-    def _select_single_account_row(self, row: int, _col: int) -> None:
-        # Enforce single-row selection and clear previous "current" focus outline.
-        sel = self.accounts_table.selectionModel()
-        if sel is None:
+    def _visible_accounts(self) -> list[Account]:
+        flt = self.filter_edit.text().strip().lower()
+        if not flt:
+            return list(self._accounts)
+        return [
+            a
+            for a in self._accounts
+            if flt in a.service.lower() or flt in a.identifier_value.lower()
+        ]
+
+    def _on_account_cell_clicked(self, row: int, col: int) -> None:
+        # Checkbox column toggles batch-selection state.
+        if col != 0:
             return
-        idx = self.accounts_table.model().index(row, 0)
-        sel.select(idx, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
-        self.accounts_table.setCurrentCell(row, 0)
+        visible = self._visible_accounts()
+        if not (0 <= row < len(visible)):
+            return
+        acct_id = visible[row].id
+        item = self.accounts_table.item(row, 0)
+        if item is None:
+            return
+        if item.checkState() == Qt.Checked:
+            self._checked_account_ids.add(acct_id)
+        else:
+            self._checked_account_ids.discard(acct_id)
+        self._on_accounts_selection_changed()
+
+    def _selected_account_ids(self) -> list[int]:
+        # Preserve old name for minimal churn: now driven by checked boxes.
+        return sorted(self._checked_account_ids)
 
     def _select_single_result_row(self, row: int, _col: int) -> None:
         sel = self.results_table.selectionModel()
@@ -435,7 +542,11 @@ class MainWindow(QMainWindow):
         if dlg.exec() != QDialog.Accepted:
             return
         row = dlg.get_value()
-        self.add_account(AccountRow(service=row.service, identifier=row.identifier))
+        pw = dlg.get_password_optional()
+        self.add_account(
+            AccountRow(service=row.service, identifier=row.identifier),
+            password=pw or None,
+        )
 
     def _on_edit_account(self) -> None:
         idx = self._selected_account_index()
@@ -453,25 +564,39 @@ class MainWindow(QMainWindow):
         self.edit_account(idx, AccountRow(service=row.service, identifier=row.identifier))
 
     def _on_delete_account(self) -> None:
-        idx = self._selected_account_index()
-        if idx is None:
+        ids = self._selected_account_ids()
+        if not ids:
             return
-        acct = self._accounts[idx]
+        if len(ids) == 1:
+            acct = next((a for a in self._accounts if a.id == ids[0]), None)
+            service = acct.service if acct else str(ids[0])
+            prompt = f"Delete account for service '{service}'?"
+        else:
+            prompt = f"Delete {len(ids)} account(s)?"
         res = QMessageBox.question(
             self,
             "Delete Account",
-            f"Delete account for service '{acct.service}'?",
+            prompt,
             QMessageBox.Yes | QMessageBox.No,
         )
         if res != QMessageBox.Yes:
             return
-        self.delete_account(idx)
+        self.delete_accounts(ids)
+        self._checked_account_ids.clear()
 
-    def add_account(self, account: AccountRow) -> None:
+    def add_account(self, account: AccountRow, *, password: str | None = None) -> None:
         if self._repo is None:
             return
-        self._repo.add_account(account.service, "email", account.identifier)
+        acct_id = self._repo.add_account(account.service, "email", account.identifier)
         self._accounts = self._repo.list_accounts()
+        if password and self._cache_repo is not None:
+            digest = sha1(password.encode("utf-8")).hexdigest().upper()
+            self._cache_repo.upsert(
+                acct_id,
+                "pwned-passwords-sha1",
+                1,
+                {"sha1": digest, "prefix5": digest[:5], "algo": "sha1"},
+            )
         self._refresh_accounts_table()
         self.statusBar().showMessage("Account added", 2500)
 
@@ -492,6 +617,14 @@ class MainWindow(QMainWindow):
         self._accounts = self._repo.list_accounts()
         self._refresh_accounts_table()
         self.statusBar().showMessage("Account deleted", 2500)
+
+    def delete_accounts(self, account_ids: list[int]) -> None:
+        if self._repo is None:
+            return
+        self._repo.delete_accounts(account_ids)
+        self._accounts = self._repo.list_accounts()
+        self._refresh_accounts_table()
+        self.statusBar().showMessage("Account(s) deleted", 2500)
 
     def _ensure_vault_unlocked(self) -> bool:
         db_path = vault_db_path()
@@ -524,6 +657,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Running checks...", 2500)
         run_id = self._run_repo.create_run()
 
+        pp = PwnedPasswordsClient()
         for acct in self._accounts:
             norm = acct.identifier_value.strip().lower()
             digest_hex = sha1(norm.encode("utf-8")).hexdigest().upper()
@@ -542,7 +676,52 @@ class MainWindow(QMainWindow):
                 data={"cache_provider": "identifier-sha1", "cache_version": 1},
             )
 
+            cached = self._cache_repo.get(acct.id, "pwned-passwords-sha1", 1)
+            sha1_hex: str | None = None
+            if cached is not None:
+                sha1_hex = str(cached.data.get("sha1") or "").strip()
+
+            if not sha1_hex:
+                dlg = PasswordDialog(self, service=acct.service)
+                if dlg.exec() != QDialog.Accepted:
+                    self.statusBar().showMessage("Run cancelled", 2500)
+                    break
+                if dlg.skipped():
+                    self._result_repo.add_result(
+                        run_id=run_id,
+                        account_id=acct.id,
+                        provider="pwned-passwords",
+                        status="skipped",
+                        data={},
+                    )
+                    continue
+                sha1_hex = sha1(dlg.get_password().encode("utf-8")).hexdigest().upper()
+                self._cache_repo.upsert(
+                    acct.id,
+                    "pwned-passwords-sha1",
+                    1,
+                    {"sha1": sha1_hex, "prefix5": sha1_hex[:5], "algo": "sha1"},
+                )
+
+            try:
+                res = pp.check_sha1(sha1_hex)
+                self._result_repo.add_result(
+                    run_id=run_id,
+                    account_id=acct.id,
+                    provider="pwned-passwords",
+                    status="ok",
+                    data={"count": res.count, "prefix5": res.prefix5},
+                )
+            except Exception as e:
+                self._result_repo.add_result(
+                    run_id=run_id,
+                    account_id=acct.id,
+                    provider="pwned-passwords",
+                    status="error",
+                    data={"error": type(e).__name__},
+                )
+
         self._refresh_runs()
         self._refresh_results()
         self.tabs.setCurrentWidget(self.reports_tab)
-        self.statusBar().showMessage(f"Run #{run_id} completed (stub)", 3500)
+        self.statusBar().showMessage(f"Run #{run_id} completed", 3500)
