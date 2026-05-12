@@ -246,12 +246,18 @@ class MainWindow(QMainWindow):
         actions.setContentsMargins(0, 0, 0, 0)
         actions.setSpacing(8)
 
+        self.issues_only_btn = QPushButton("Issues Only: OFF")
+        self.issues_only_btn.setObjectName("issues_only_btn")
+        self.issues_only_btn.setCheckable(True)
+        self.issues_only_btn.clicked.connect(self._on_toggle_issues_only)
+
         self.delete_run_btn = QPushButton("Delete Run")
         self.delete_run_btn.setObjectName("delete_run_btn")
         self.delete_run_btn.setEnabled(False)
         self.delete_run_btn.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_TrashIcon))
         self.delete_run_btn.clicked.connect(self._on_delete_run)
 
+        actions.addWidget(self.issues_only_btn)
         actions.addStretch(1)
         actions.addWidget(self.delete_run_btn)
 
@@ -466,6 +472,12 @@ class MainWindow(QMainWindow):
         if run_id is None or self._result_repo is None:
             return
         results = self._result_repo.list_results_for_run(run_id)
+        prev_run_id = self._previous_run_id(run_id)
+        prev_results = (
+            self._result_repo.list_results_for_run(prev_run_id)
+            if prev_run_id is not None
+            else []
+        )
 
         acct_by_id = {a.id: a for a in self._accounts}
         runs = self._run_repo.list_runs() if self._run_repo is not None else []
@@ -477,19 +489,219 @@ class MainWindow(QMainWindow):
         for r in results:
             by_account.setdefault(r.account_id, []).append(r)
 
-        lines: list[str] = [header, ""]
-        for acct_id in sorted(by_account.keys()):
+        prev_by_key = self._index_results(prev_results)
+        cur_by_key = self._index_results(results)
+        summary = self._summarize_run(by_account, prev_run_id)
+
+        lines: list[str] = [header, summary, ""]
+
+        order = self._ordered_accounts_for_report(by_account, acct_by_id)
+        for acct_id in order:
             acct = acct_by_id.get(acct_id)
             service = acct.service if acct else f"account:{acct_id}"
             ident = acct.identifier_value if acct else ""
             if self._is_redaction_enabled():
                 ident = self._redact_identifier(ident)
-            lines.append(f"{service}  |  {ident}")
+            bucket = self._account_bucket(by_account[acct_id]).upper()
+            signals = self._account_signals(by_account[acct_id])
+            if signals:
+                lines.append(
+                    f"Status: {bucket}  |  {service}  |  {ident}\n"
+                    f"Findings: {', '.join(signals)}"
+                )
+            else:
+                lines.append(f"Status: {bucket}  |  {service}  |  {ident}")
+            deltas = self._account_deltas(acct_id, cur_by_key, prev_by_key)
             for rr in by_account[acct_id]:
                 lines.append(f"  - {self._format_result_line(rr.provider, rr.status, rr.data)}")
+            if deltas:
+                lines.append("  - New since last run:")
+                for d in deltas:
+                    lines.append(f"    * {d}")
             lines.append("")
 
         self.report_text.setPlainText("\n".join(lines).rstrip())
+
+    def _previous_run_id(self, run_id: int) -> int | None:
+        if self._run_repo is None:
+            return None
+        asc = self._run_repo.list_runs_asc()
+        ids = [r.id for r in asc]
+        try:
+            idx = ids.index(run_id)
+        except ValueError:
+            return None
+        if idx <= 0:
+            return None
+        return ids[idx - 1]
+
+    @staticmethod
+    def _index_results(results: list[Any]) -> dict[tuple[int, str], Any]:
+        # Keyed by (account_id, provider)
+        out: dict[tuple[int, str], Any] = {}
+        for r in results:
+            out[(int(r.account_id), str(r.provider))] = r
+        return out
+
+    def _summarize_run(self, by_account: dict[int, list[Any]], prev_run_id: int | None) -> str:
+        accounts = len(by_account)
+        ok = 0
+        attention = 0
+        unknown = 0
+        errors = 0
+        skipped = 0
+
+        for _acct_id, rows in by_account.items():
+            bucket = self._account_bucket(rows)
+            if bucket == "error":
+                errors += 1
+            elif bucket == "unknown":
+                unknown += 1
+            elif bucket == "attention":
+                attention += 1
+            elif bucket == "skipped":
+                skipped += 1
+            else:
+                ok += 1
+
+        prev_note = " (no previous run)" if prev_run_id is None else ""
+        return (
+            f"Summary: {accounts} accounts | OK {ok} | Attention {attention} | Unknown {unknown} | "
+            f"Error {errors} | Skipped {skipped}"
+            f"{prev_note}"
+        )
+
+    @staticmethod
+    def _account_bucket(rows: list[Any]) -> str:
+        # Buckets are mutually exclusive for summary/grouping:
+        # error > unknown > attention > skipped > ok
+        has_skip = False
+        has_unknown = False
+        has_attention = False
+        for r in rows:
+            if r.provider == "pwned-passwords":
+                if r.status == "error":
+                    return "error"
+                if r.status == "skipped":
+                    has_skip = True
+                if r.status == "ok":
+                    try:
+                        if int(r.data.get("count", 0)) > 0:
+                            has_attention = True
+                    except Exception:
+                        pass
+            if r.provider == "domain-posture":
+                if r.status == "unknown":
+                    has_unknown = True
+                elif r.status == "attention":
+                    has_attention = True
+
+        if has_unknown:
+            return "unknown"
+        if has_attention:
+            return "attention"
+        if has_skip:
+            return "skipped"
+        return "ok"
+
+    @staticmethod
+    def _account_signals(rows: list[Any]) -> list[str]:
+        """
+        Non-exclusive signals that explain why the final bucket was chosen.
+        Bucketing remains single-valued via _account_bucket() precedence.
+        """
+        sigs: list[str] = []
+        for r in rows:
+            if r.provider == "pwned-passwords":
+                if r.status == "error":
+                    sigs.append("password-check error")
+                elif r.status == "skipped":
+                    sigs.append("password-check skipped")
+                elif r.status == "ok":
+                    try:
+                        cnt = int(r.data.get("count", 0))
+                    except Exception:
+                        cnt = 0
+                    if cnt > 0:
+                        sigs.append("password exposed")
+            elif r.provider == "domain-posture":
+                if r.status == "attention":
+                    sigs.append("domain needs attention")
+                elif r.status == "unknown":
+                    sigs.append("domain unknown")
+        # Deduplicate in order.
+        seen: set[str] = set()
+        out: list[str] = []
+        for s in sigs:
+            if s not in seen:
+                out.append(s)
+                seen.add(s)
+        return out
+
+    def _ordered_accounts_for_report(
+        self,
+        by_account: dict[int, list[Any]],
+        acct_by_id: dict[int, Account],
+    ) -> list[int]:
+        ids = list(by_account.keys())
+
+        # Issues-only filter.
+        if self.issues_only_btn.isChecked():
+            ids = [i for i in ids if self._account_bucket(by_account[i]) != "ok"]
+
+        def key(acct_id: int) -> tuple[int, str, str]:
+            b = self._account_bucket(by_account[acct_id])
+            prio = {"error": 0, "unknown": 1, "attention": 2, "skipped": 3, "ok": 4}.get(b, 9)
+            acct = acct_by_id.get(acct_id)
+            service = (acct.service if acct else "").lower()
+            ident = (acct.identifier_value if acct else "").lower()
+            return (prio, service, ident)
+
+        return sorted(ids, key=key)
+
+    def _on_toggle_issues_only(self) -> None:
+        self.issues_only_btn.setText(
+            "Issues Only: ON" if self.issues_only_btn.isChecked() else "Issues Only: OFF"
+        )
+        self._refresh_results()
+
+    def _account_deltas(
+        self,
+        account_id: int,
+        cur: dict[tuple[int, str], Any],
+        prev: dict[tuple[int, str], Any],
+    ) -> list[str]:
+        out: list[str] = []
+
+        cur_pw = cur.get((account_id, "pwned-passwords"))
+        prev_pw = prev.get((account_id, "pwned-passwords"))
+        if cur_pw is not None and cur_pw.status == "ok":
+            cur_count = self._safe_int(cur_pw.data.get("count", 0))
+            prev_count = (
+                self._safe_int(prev_pw.data.get("count", 0)) if prev_pw is not None else None
+            )
+            if prev_count is None:
+                # First time seen; only call out if exposed.
+                if cur_count > 0:
+                    out.append(f"Password exposure detected ({cur_count} times)")
+            else:
+                if cur_count > prev_count:
+                    out.append(f"Password exposure count increased ({prev_count} -> {cur_count})")
+
+        cur_dom = cur.get((account_id, "domain-posture"))
+        prev_dom = prev.get((account_id, "domain-posture"))
+        if cur_dom is not None and prev_dom is not None:
+            if str(cur_dom.status) != str(prev_dom.status):
+                out.append(f"Domain posture changed ({prev_dom.status} -> {cur_dom.status})")
+
+        return out
+
+    @staticmethod
+    def _safe_int(v: Any) -> int:
+        try:
+            return int(v)
+        except Exception:
+            return 0
 
     @staticmethod
     def _format_result_line(provider: str, status: str, data: dict[str, Any]) -> str:
@@ -876,4 +1088,6 @@ class MainWindow(QMainWindow):
         self._refresh_results()
         self.tabs.setCurrentWidget(self.reports_tab)
         if run_id:
-            self.statusBar().showMessage(f"Run #{run_id} completed", 3500)
+            serial = self._run_serial_by_id.get(run_id, 0)
+            label = f"Run {serial}" if serial else f"Run #{run_id}"
+            self.statusBar().showMessage(f"{label} completed", 3500)
